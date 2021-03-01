@@ -17,7 +17,7 @@ from torch.utils import data, model_zoo
 
 from model.deeplab import Res_Deeplab
 from dataset.voc_dataset import VOCDataSet
-
+from model.deeplab import Res_Deeplab
 from PIL import Image
 
 import matplotlib.pyplot as plt
@@ -30,7 +30,7 @@ DATA_LIST_PATH = './dataset/voc_list/val.txt'
 IGNORE_LABEL = 255
 NUM_CLASSES = 21
 NUM_STEPS = 1449 # Number of images in the validation set.
-RESTORE_FROM = 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/AdvSemiSegVOC0.125-8d75b3f1.pth'
+#RESTORE_FROM = 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/AdvSemiSegVOC0.125-8d75b3f1.pth'
 PRETRAINED_MODEL = None
 SAVE_DIRECTORY = 'results'
 
@@ -58,7 +58,7 @@ def get_arguments():
                         help="The index of the label to ignore during the training.")
     parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,
                         help="Number of classes to predict (including background).")
-    parser.add_argument("--restore-from", type=str, default=RESTORE_FROM,
+    parser.add_argument("--restore-from", type=str, default='',
                         help="Where restore model parameters from.")
     parser.add_argument("--pretrained-model", type=str, default=PRETRAINED_MODEL,
                         help="Where restore model parameters from.")
@@ -187,14 +187,39 @@ def main():
 
     model = Res_Deeplab(num_classes=args.num_classes)
 
-    if args.pretrained_model != None:
-        args.restore_from = pretrianed_models_dict[args.pretrained_model]
+    # if args.pretrained_model != None:
+    #     args.restore_from = pretrianed_models_dict[args.pretrained_model]
+    #
+    # if args.restore_from[:4] == 'http' :
+    #     saved_state_dict = model_zoo.load_url(args.restore_from)
+    # else:
+    #     saved_state_dict = torch.load(args.restore_from)
+    #model.load_state_dict(saved_state_dict)
 
-    if args.restore_from[:4] == 'http' :
-        saved_state_dict = model_zoo.load_url(args.restore_from)
-    else:
-        saved_state_dict = torch.load(args.restore_from)
-    model.load_state_dict(saved_state_dict)
+    model = Res_Deeplab(num_classes=args.num_classes)
+    #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))
+    state_dict=torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_20000.pth')
+
+
+    # original saved file with DataParallel
+
+    # create new OrderedDict that does not contain `module.`
+    from collections import OrderedDict
+    new_state_dict = OrderedDict()
+    for k, v in state_dict.items():
+        name = k[7:]  # remove `module.`
+        new_state_dict[name] = v
+    # load params
+
+
+    new_params = model.state_dict().copy()
+    for name, param in new_params.items():
+        print (name)
+        if name in new_state_dict and param.size() == new_state_dict[name].size():
+            new_params[name].copy_(new_state_dict[name])
+            print('copy {}'.format(name))
+
+    model.load_state_dict(new_params)
 
     model.eval()
     model.cuda(gpu0)

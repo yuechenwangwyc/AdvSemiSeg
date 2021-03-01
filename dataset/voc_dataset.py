@@ -53,7 +53,9 @@ class VOCDataSet(data.Dataset):
             image, label = self.generate_scale_label(image, label)
         image = np.asarray(image, np.float32)
         image -= self.mean
+
         img_h, img_w = label.shape
+
         pad_h = max(self.crop_h - img_h, 0)
         pad_w = max(self.crop_w - img_w, 0)
         if pad_h > 0 or pad_w > 0:

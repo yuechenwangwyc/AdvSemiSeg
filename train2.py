@@ -55,7 +55,8 @@ LAMBDA_ADV_PRED = 0.1
 
 PARTIAL_DATA=0.5
 
-SEMI_START=5000
+#SEMI_START=5000
+SEMI_START=0
 LAMBDA_SEMI=0.1
 MASK_T=0.2
 
@@ -149,7 +150,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -385,8 +386,9 @@ def main():
                         loss_semi_value += 0
                     else:
                         semi_gt = torch.FloatTensor(semi_gt)
+                        loss_cal=loss_calc(pred, semi_gt)
 
-                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)
+                        loss_semi = args.lambda_semi * loss_cal*D_out_sigmoid
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
@@ -472,14 +474,14 @@ def main():
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(args.num_steps)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(i_iter)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')

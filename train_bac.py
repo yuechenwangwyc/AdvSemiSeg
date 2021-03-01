@@ -83,7 +83,7 @@ def get_arguments():
                         help="Path to the directory containing the PASCAL VOC dataset.")
     parser.add_argument("--data-list", type=str, default=DATA_LIST_PATH,
                         help="Path to the file listing the images in the dataset.")
-    parser.add_argument("--partial-data", type=float, default=0.125,
+    parser.add_argument("--partial-data", type=float, default=PARTIAL_DATA,
                         help="The index of the label to ignore during the training.")
     parser.add_argument("--partial-id", type=str, default=None,
                         help="restore partial id list")
@@ -97,15 +97,15 @@ def get_arguments():
                         help="Base learning rate for training with polynomial decay.")
     parser.add_argument("--learning-rate-D", type=float, default=LEARNING_RATE_D,
                         help="Base learning rate for discriminator.")
-    parser.add_argument("--lambda-adv-pred", type=float, default=0.01,
+    parser.add_argument("--lambda-adv-pred", type=float, default=LAMBDA_ADV_PRED,
                         help="lambda_adv for adversarial training.")
-    parser.add_argument("--lambda-semi", type=float, default=0.1,
+    parser.add_argument("--lambda-semi", type=float, default=LAMBDA_SEMI,
                         help="lambda_semi for adversarial training.")
     parser.add_argument("--lambda-semi-adv", type=float, default=LAMBDA_SEMI_ADV,
                         help="lambda_semi for adversarial training.")
-    parser.add_argument("--mask-T", type=float, default=0.2,
+    parser.add_argument("--mask-T", type=float, default=MASK_T,
                         help="mask T for semi adversarial training.")
-    parser.add_argument("--semi-start", type=int, default=5000,
+    parser.add_argument("--semi-start", type=int, default=SEMI_START,
                         help="start semi learning after # iterations")
     parser.add_argument("--semi-start-adv", type=int, default=SEMI_START_ADV,
                         help="start semi learning after # iterations")
@@ -117,7 +117,7 @@ def get_arguments():
                         help="Whether to not restore last (FC) layers.")
     parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,
                         help="Number of classes to predict (including background).")
-    parser.add_argument("--num-steps", type=int, default=20000,
+    parser.add_argument("--num-steps", type=int, default=NUM_STEPS,
                         help="Number of training steps.")
     parser.add_argument("--power", type=float, default=POWER,
                         help="Decay parameter to compute the learning rate.")
@@ -135,31 +135,24 @@ def get_arguments():
                         help="How many images to save.")
     parser.add_argument("--save-pred-every", type=int, default=SAVE_PRED_EVERY,
                         help="Save summaries and checkpoint every often.")
-    parser.add_argument("--snapshot-dir", type=str, default='snapshots',
+    parser.add_argument("--snapshot-dir", type=str, default=SNAPSHOT_DIR,
                         help="Where to save snapshots of the model.")
     parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY,
                         help="Regularisation parameter for L2-loss.")
-    parser.add_argument("--gpu", type=int, default="0",
+    parser.add_argument("--gpu", type=int, default=2,
                         help="choose gpu device.")
     return parser.parse_args()
-"""
---snapshot-dir snapshots \
-                --partial-data 0.125 \
-                --num-steps 20000 \
-                --lambda-adv-pred 0.01 \
-                --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
-"""
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,2,3'
+
 args = get_arguments()
 
-def loss_calc(pred, label):
+def loss_calc(pred, label, gpu):
     """
     This function returns cross entropy loss for semantic segmentation
     """
     # out shape batch_size x channels x h x w -> batch_size x channels x h x w
     # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
-    label = Variable(label.long()).cuda()
-    criterion = CrossEntropy2d().cuda()
+    label = Variable(label.long()).cuda(gpu)
+    criterion = CrossEntropy2d().cuda(gpu)
 
     return criterion(pred, label)
 
@@ -192,7 +185,7 @@ def make_D_label(label, ignore_mask):
     ignore_mask = np.expand_dims(ignore_mask, axis=1)
     D_label = np.ones(ignore_mask.shape)*label
     D_label[ignore_mask] = 255
-    D_label = Variable(torch.FloatTensor(D_label)).cuda()
+    D_label = Variable(torch.FloatTensor(D_label)).cuda(args.gpu)
 
     return D_label
 
@@ -203,7 +196,7 @@ def main():
     input_size = (h, w)
 
     cudnn.enabled = True
-
+    gpu = args.gpu
 
     # create network
     model = Res_Deeplab(num_classes=args.num_classes)
@@ -214,23 +207,18 @@ def main():
     else:
         saved_state_dict = torch.load(args.restore_from)
 
-    # only copy the params that exist in currendt model (caffe-like)
+    # only copy the params that exist in current model (caffe-like)
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
         print (name)
         if name in saved_state_dict and param.size() == saved_state_dict[name].size():
             new_params[name].copy_(saved_state_dict[name])
             print('copy {}'.format(name))
-
     model.load_state_dict(new_params)
 
 
     model.train()
-
-
-    model=nn.DataParallel(model)
-    model.cuda()
-
+    model.cuda(args.gpu)
 
     cudnn.benchmark = True
 
@@ -238,10 +226,8 @@ def main():
     model_D = FCDiscriminator(num_classes=args.num_classes)
     if args.restore_from_D is not None:
         model_D.load_state_dict(torch.load(args.restore_from_D))
-
-    model_D = nn.DataParallel(model_D)
     model_D.train()
-    model_D.cuda()
+    model_D.cuda(args.gpu)
 
 
     if not os.path.exists(args.snapshot_dir):
@@ -270,7 +256,7 @@ def main():
             train_ids = pickle.load(open(args.partial_id))
             print('loading train ids from {}'.format(args.partial_id))
         else:
-            train_ids = list(range(train_dataset_size))
+            train_ids = range(train_dataset_size)
             np.random.shuffle(train_ids)
 
         pickle.dump(train_ids, open(osp.join(args.snapshot_dir, 'train_id.pkl'), 'wb'))
@@ -296,7 +282,7 @@ def main():
     # implement model.optim_parameters(args) to handle different models' lr setting
 
     # optimizer for segmentation network
-    optimizer = optim.SGD(model.module.optim_parameters(args),
+    optimizer = optim.SGD(model.optim_parameters(args),
                 lr=args.learning_rate, momentum=args.momentum,weight_decay=args.weight_decay)
     optimizer.zero_grad()
 
@@ -334,7 +320,6 @@ def main():
 
         for sub_i in range(args.iter_size):
 
-
             # train G
 
             # don't accumulate grads in D
@@ -351,7 +336,7 @@ def main():
 
                 # only access to img
                 images, _, _, _ = batch
-                images = Variable(images).cuda()
+                images = Variable(images).cuda(args.gpu)
 
 
                 pred = interp(model(images))
@@ -386,7 +371,7 @@ def main():
                     else:
                         semi_gt = torch.FloatTensor(semi_gt)
 
-                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)
+                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt, args.gpu)
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
@@ -405,11 +390,11 @@ def main():
                 _, batch = trainloader_iter.next()
 
             images, labels, _, _ = batch
-            images = Variable(images).cuda()
+            images = Variable(images).cuda(args.gpu)
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
 
-            loss_seg = loss_calc(pred, labels)
+            loss_seg = loss_calc(pred, labels, args.gpu)
 
             D_out = interp(model_D(F.softmax(pred)))
 
@@ -453,7 +438,7 @@ def main():
                 _, batch = trainloader_gt_iter.next()
 
             _, labels_gt, _, _ = batch
-            D_gt_v = Variable(one_hot(labels_gt)).cuda()
+            D_gt_v = Variable(one_hot(labels_gt)).cuda(args.gpu)
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
             D_out = interp(model_D(D_gt_v))
