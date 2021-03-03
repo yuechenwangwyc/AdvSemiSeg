@@ -8,7 +8,7 @@ import pickle
 from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
-import scipy.misc
+import scipy.miscv
 import torch.backends.cudnn as cudnn
 import sys
 import os

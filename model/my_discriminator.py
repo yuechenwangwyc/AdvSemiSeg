@@ -33,3 +33,7 @@ class FCDiscriminator(nn.Module):
 		#x = self.sigmoid(x) 
 
 		return x
+
+
+
+

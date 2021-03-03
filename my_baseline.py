@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '2'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -235,13 +235,13 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = FCDiscriminator(num_classes=args.num_classes)
-    if args.restore_from_D is not None:
-        model_D.load_state_dict(torch.load(args.restore_from_D))
-
-    model_D = nn.DataParallel(model_D)
-    model_D.train()
-    model_D.cuda()
+    # model_D = FCDiscriminator(num_classes=args.num_classes)
+    # if args.restore_from_D is not None:
+    #     model_D.load_state_dict(torch.load(args.restore_from_D))
+    #
+    # model_D = nn.DataParallel(model_D)
+    # model_D.train()
+    # model_D.cuda()
 
 
     if not os.path.exists(args.snapshot_dir):
@@ -256,7 +256,7 @@ def main():
     train_gt_dataset = VOCGTDataSet(args.data_dir, args.data_list, crop_size=input_size,
                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
 
-    if args.partial_data is None:
+    if args.partial_data ==0:
         trainloader = data.DataLoader(train_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=5, pin_memory=True)
 
@@ -304,8 +304,8 @@ def main():
     optimizer.zero_grad()
 
     # optimizer for discriminator network
-    optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
-    optimizer_D.zero_grad()
+    # optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
+    # optimizer_D.zero_grad()
 
     # loss/ bilinear upsampling
     bce_loss = BCEWithLogitsLoss2d()
@@ -332,8 +332,8 @@ def main():
 
         optimizer.zero_grad()
         adjust_learning_rate(optimizer, i_iter)
-        optimizer_D.zero_grad()
-        adjust_learning_rate_D(optimizer_D, i_iter)
+        # optimizer_D.zero_grad()
+        # adjust_learning_rate_D(optimizer_D, i_iter)
 
         for sub_i in range(args.iter_size):
 
@@ -341,8 +341,8 @@ def main():
             # train G
 
             # don't accumulate grads in D
-            for param in model_D.parameters():
-                param.requires_grad = False
+            # for param in model_D.parameters():
+            #     param.requires_grad = False
 
             # do semi first
             '''
@@ -416,78 +416,80 @@ def main():
 
             loss_seg = loss_calc(pred, labels)
 
-            D_out = interp(model_D(F.softmax(pred)))
+            # D_out = interp(model_D(F.softmax(pred)))
 
-            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
+            # loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
-            loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
+            # loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
+
+            loss = loss_seg
 
             # proper normalization
             loss = loss/args.iter_size
             loss.backward()
             loss_seg_value += loss_seg.data.cpu().numpy()[0]/args.iter_size
-            loss_adv_pred_value += loss_adv_pred.data.cpu().numpy()[0]/args.iter_size
+            # loss_adv_pred_value += loss_adv_pred.data.cpu().numpy()[0]/args.iter_size
 
 
             # train D
 
-            # bring back requires_grad
-            for param in model_D.parameters():
-                param.requires_grad = True
-
-            # train with pred
-            pred = pred.detach()
-
-            '''
-
-            if args.D_remain:
-                pred = torch.cat((pred, pred_remain), 0)
-                ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
-            '''
-
-            D_out = interp(model_D(F.softmax(pred)))
-            loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
-            loss_D = loss_D/args.iter_size/2
-            loss_D.backward()
-            loss_D_value += loss_D.data.cpu().numpy()[0]
-
-
-            # train with gt
-            # get gt labels
-            try:
-                _, batch = trainloader_gt_iter.next()
-            except:
-                trainloader_gt_iter = enumerate(trainloader_gt)
-                _, batch = trainloader_gt_iter.next()
-
-            _, labels_gt, _, _ = batch
-            D_gt_v = Variable(one_hot(labels_gt)).cuda()
-            ignore_mask_gt = (labels_gt.numpy() == 255)
-
-            D_out = interp(model_D(D_gt_v))
-            loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
-            loss_D = loss_D/args.iter_size/2
-            loss_D.backward()
-            loss_D_value += loss_D.data.cpu().numpy()[0]
+            # # bring back requires_grad
+            # for param in model_D.parameters():
+            #     param.requires_grad = True
+            #
+            # # train with pred
+            # pred = pred.detach()
+            #
+            # '''
+            #
+            # if args.D_remain:
+            #     pred = torch.cat((pred, pred_remain), 0)
+            #     ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
+            # '''
+            #
+            # D_out = interp(model_D(F.softmax(pred)))
+            # loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
+            # loss_D = loss_D/args.iter_size/2
+            # loss_D.backward()
+            # loss_D_value += loss_D.data.cpu().numpy()[0]
+            #
+            #
+            # # train with gt
+            # # get gt labels
+            # try:
+            #     _, batch = trainloader_gt_iter.next()
+            # except:
+            #     trainloader_gt_iter = enumerate(trainloader_gt)
+            #     _, batch = trainloader_gt_iter.next()
+            #
+            # _, labels_gt, _, _ = batch
+            # D_gt_v = Variable(one_hot(labels_gt)).cuda()
+            # ignore_mask_gt = (labels_gt.numpy() == 255)
+            #
+            # D_out = interp(model_D(D_gt_v))
+            # loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
+            # loss_D = loss_D/args.iter_size/2
+            # loss_D.backward()
+            # loss_D_value += loss_D.data.cpu().numpy()[0]
 
 
 
         optimizer.step()
-        optimizer_D.step()
+        # optimizer_D.step()
 
         print('exp = {}'.format(args.snapshot_dir))
         print('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_baseline'+str(args.num_steps)+'.pth'))
+            #torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_baseline_'+str(i_iter)+'.pth'))
+            #torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')

@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -256,7 +256,7 @@ def main():
     train_gt_dataset = VOCGTDataSet(args.data_dir, args.data_list, crop_size=input_size,
                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
 
-    if args.partial_data is None:
+    if args.partial_data ==0:
         trainloader = data.DataLoader(train_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=5, pin_memory=True)
 

@@ -8,7 +8,7 @@ import pickle
 from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
-import scipy.misc
+#import scipy.miscv
 import torch.backends.cudnn as cudnn
 import sys
 import os
@@ -18,7 +18,7 @@ from packaging import version
 
 from model.deeplab import Res_Deeplab
 from model.discriminator import FCDiscriminator
-from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
+from utils.loss_g import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
 
@@ -55,8 +55,7 @@ LAMBDA_ADV_PRED = 0.1
 
 PARTIAL_DATA=0.5
 
-#SEMI_START=5000
-SEMI_START=0
+SEMI_START=5000
 LAMBDA_SEMI=0.1
 MASK_T=0.2
 
@@ -150,10 +149,10 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
-def loss_calc(pred, label):
+def loss_calc(pred, label,D_out):
     """
     This function returns cross entropy loss for semantic segmentation
     """
@@ -162,7 +161,7 @@ def loss_calc(pred, label):
     label = Variable(label.long()).cuda()
     criterion = CrossEntropy2d().cuda()
 
-    return criterion(pred, label)
+    return criterion(pred, label,D_out)
 
 
 def lr_poly(base_lr, iter, max_iter, power):
@@ -359,7 +358,10 @@ def main():
                 pred_remain = pred.detach()
 
                 D_out = interp(model_D(F.softmax(pred)))
+
+
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
+
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
 
@@ -386,9 +388,8 @@ def main():
                         loss_semi_value += 0
                     else:
                         semi_gt = torch.FloatTensor(semi_gt)
-                        loss_cal=loss_calc(pred, semi_gt)
 
-                        loss_semi = args.lambda_semi * loss_cal*D_out_sigmoid
+                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt,D_out_sigmoid)
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
@@ -411,9 +412,16 @@ def main():
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
 
-            loss_seg = loss_calc(pred, labels)
-
             D_out = interp(model_D(F.softmax(pred)))
+
+            D_out1 = D_out.copy()
+            D_out1 = Variable(torch.FloatTensor(D_out1)).cuda()
+
+            loss_seg1 = loss_calc(pred, labels)
+            print "s",loss_seg1.size()
+            loss_seg=loss_seg1*D_out1
+
+
 
             loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
@@ -474,14 +482,14 @@ def main():
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(args.num_steps)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(i_iter)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC2_'+str(i_iter)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')
