@@ -18,7 +18,7 @@ from packaging import version
 
 from model.deeplab import Res_Deeplab
 from model.discriminator import FCDiscriminator
-from utils.loss_g import CrossEntropy2d, BCEWithLogitsLoss2d
+from utils.loss_g import CrossEntropy2d, CrossEntropy2d2, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
 
@@ -152,7 +152,7 @@ def get_arguments():
 os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
-def loss_calc(pred, label,D_out):
+def loss_calc(pred, label):
     """
     This function returns cross entropy loss for semantic segmentation
     """
@@ -161,7 +161,19 @@ def loss_calc(pred, label,D_out):
     label = Variable(label.long()).cuda()
     criterion = CrossEntropy2d().cuda()
 
-    return criterion(pred, label,D_out)
+    return criterion(pred, label)
+
+def loss_calc2(pred, label):
+    """
+    This function returns cross entropy loss for semantic segmentation
+    """
+    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
+    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
+    label = Variable(label.long()).cuda()
+    criterion = CrossEntropy2d2().cuda()
+    loss_en,mask=criterion(pred, label)
+
+    return loss_en,mask
 
 
 def lr_poly(base_lr, iter, max_iter, power):
@@ -357,10 +369,14 @@ def main():
                 pred = interp(model(images))
                 pred_remain = pred.detach()
 
-                D_out = interp(model_D(F.softmax(pred)))
+                D_out = interp(model_D(F.softmax(pred,dim=1)))
 
 
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
+
+
+
+
 
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
@@ -389,7 +405,24 @@ def main():
                     else:
                         semi_gt = torch.FloatTensor(semi_gt)
 
-                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt,D_out_sigmoid)
+
+
+
+
+                        D_out1 = D_out_sigmoid.data.cpu().numpy().copy()
+                        D_out1 = Variable(torch.FloatTensor(D_out1)).cuda()
+
+                        loss_seg1,mask = loss_calc2(pred, semi_gt)
+
+                        loss_seg = loss_seg1 * D_out1
+
+                        loss_seg=loss_seg[mask]
+
+
+
+                        loss_seg = torch.mean(loss_seg)
+
+                        loss_semi = args.lambda_semi * loss_seg
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
@@ -412,14 +445,12 @@ def main():
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
 
-            D_out = interp(model_D(F.softmax(pred)))
 
-            D_out1 = D_out.copy()
-            D_out1 = Variable(torch.FloatTensor(D_out1)).cuda()
 
-            loss_seg1 = loss_calc(pred, labels)
-            print "s",loss_seg1.size()
-            loss_seg=loss_seg1*D_out1
+            loss_seg = loss_calc(pred, labels)
+
+
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
 
 
 
@@ -447,7 +478,7 @@ def main():
                 pred = torch.cat((pred, pred_remain), 0)
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
 
-            D_out = interp(model_D(F.softmax(pred)))
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
             loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
@@ -482,14 +513,14 @@ def main():
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_g_'+str(args.num_steps)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_g_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_g_'+str(i_iter)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_g_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')
