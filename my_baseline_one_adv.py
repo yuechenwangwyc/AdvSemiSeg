@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.deeplab import Res_Deeplab
-from model.discriminator import FCDiscriminator
+from model.my_discriminator import Discriminator
 from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
