@@ -409,18 +409,19 @@ def main():
 
 
 
-                        D_out1 = D_out_sigmoid.data.cpu().numpy().copy()
+                        D_out1 = D_out_sigmoid.copy()
                         D_out1 = Variable(torch.FloatTensor(D_out1)).cuda()
 
                         loss_seg1,mask = loss_calc2(pred, semi_gt)
 
                         loss_seg = loss_seg1 * D_out1
 
+
                         loss_seg=loss_seg[mask]
 
 
 
-                        loss_seg = torch.mean(loss_seg)
+                        loss_seg = torch.mean(loss_seg)*2
 
                         loss_semi = args.lambda_semi * loss_seg
                         loss_semi = loss_semi/args.iter_size
