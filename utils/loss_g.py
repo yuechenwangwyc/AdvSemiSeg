@@ -81,12 +81,32 @@ class CrossEntropy2d2(nn.Module):
         assert predict.size(2) == target.size(1), "{0} vs {1} ".format(predict.size(2), target.size(1))
         assert predict.size(3) == target.size(2), "{0} vs {1} ".format(predict.size(3), target.size(3))
 
+
+
+
+
+
         n, c, h, w = predict.size()
         target_mask = (target >= 0) * (target != self.ignore_label)
-        #target = target[target_mask]
+        # print "mask",target_mask.size()
+        # print "t1",target.size()
+        target = target[target_mask]
+        # print "t2",target.size()
         if not target.data.dim():
             return Variable(torch.zeros(1))
-        #predict = predict.transpose(1, 2).transpose(2, 3).contiguous()
+        # print "p1", predict.size()
+        predict = predict.transpose(1, 2).transpose(2, 3).contiguous()
+        predict = predict[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
+        # print "p2", predict.size()
+
+
+        # mask(10L, 321L, 321L)
+        # t1(10L, 321L, 321L)
+        # t2(1030410L, )
+        # p1(10L, 21L, 321L, 321L)
+        # p2(1030410L, 21L)
+        # loss(1030410L, )
+        # d(1030410L, )
 
 
 

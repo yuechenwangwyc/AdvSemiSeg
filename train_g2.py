@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -428,7 +428,7 @@ def main():
 
                         loss_seg = torch.mean(loss_seg)
 
-                        loss_semi = args.lambda_semi * loss_seg
+                        loss_semi = args.lambda_semi * loss_seg*2.0
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
