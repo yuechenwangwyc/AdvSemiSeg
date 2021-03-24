@@ -142,7 +142,14 @@ def get_arguments():
     parser.add_argument("--gpu", type=int, default=2,
                         help="choose gpu device.")
     return parser.parse_args()
-
+"""
+--snapshot-dir snapshots \
+                --partial-data 0.125 \
+                --num-steps 20000 \
+                --lambda-adv-pred 0.01 \
+                --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
+"""
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 args = get_arguments()
 
 def loss_calc(pred, label, gpu):
@@ -282,7 +289,7 @@ def main():
     # implement model.optim_parameters(args) to handle different models' lr setting
 
     # optimizer for segmentation network
-    optimizer = optim.SGD(model.optim_parameters(args),
+    optimizer = optim.SGD(model.module.optim_parameters(args),
                 lr=args.learning_rate, momentum=args.momentum,weight_decay=args.weight_decay)
     optimizer.zero_grad()
 

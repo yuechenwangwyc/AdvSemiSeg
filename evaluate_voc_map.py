@@ -33,7 +33,7 @@ NUM_STEPS = 1449 # Number of images in the validation set.
 #RESTORE_FROM = 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/AdvSemiSegVOC0.125-8d75b3f1.pth'
 PRETRAINED_MODEL = None
 SAVE_DIRECTORY = 'results'
-
+os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
 
 pretrianed_models_dict ={'semi0.125': 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/AdvSemiSegVOC0.125-03c6f81c.pth',
                          'semi0.25': 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/AdvSemiSegVOC0.25-473f8a14.pth',
@@ -199,6 +199,11 @@ def main():
     model = Res_Deeplab(num_classes=args.num_classes)
     #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))
     state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_20000.pth')
+    from model.discriminator import FCDiscriminator
+
+    model_D = FCDiscriminator(num_classes=args.num_classes)
+
+    state_dict_d = torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_20000_D.pth')
 
 
     # original saved file with DataParallel
@@ -210,8 +215,6 @@ def main():
         name = k[7:]  # remove `module.`
         new_state_dict[name] = v
     # load params
-
-
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
         print (name)
@@ -222,7 +225,25 @@ def main():
     model.load_state_dict(new_params)
 
     model.eval()
-    model.cuda(gpu0)
+    model.cuda()
+
+    new_state_dict_d = OrderedDict()
+    for k, v in state_dict_d.items():
+        name = k[7:]  # remove `module.`
+        new_state_dict_d[name] = v
+
+    new_params_d = model_D.state_dict().copy()
+    for name, param in new_params_d.items():
+
+        print (name)
+        if name in new_state_dict_d and param.size() == new_state_dict_d[name].size():
+            new_params_d[name].copy_(new_state_dict_d[name])
+            print('copy {}'.format(name))
+
+    model_D.load_state_dict(new_params_d)
+
+    model_D.eval()
+    model_D.cuda()
 
     testloader = data.DataLoader(VOCDataSet(args.data_dir, args.data_list, crop_size=(505, 505), mean=IMG_MEAN, scale=False, mirror=False),
                                     batch_size=1, shuffle=False, pin_memory=True)
@@ -240,18 +261,45 @@ def main():
             print('%d processd'%(index))
         image, label, size, name = batch
         size = size[0].numpy()
-        output = model(Variable(image, volatile=True).cuda(gpu0))
-        output = interp(output).cpu().data[0].numpy()
+        output = model(Variable(image, volatile=True).cuda())
+        output=interp(output)
+
+
+        output2 = output
+
+        output = output.cpu().data[0].numpy()
 
         output = output[:,:size[0],:size[1]]
         gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)
 
         output = output.transpose(1,2,0)
         output = np.asarray(np.argmax(output, axis=2), dtype=np.int)
+        output3=output
+
+        semi_ignore_mask_e = (output == gt)
+        semi_ignore_mask_ne= (output != gt)
+        output3[semi_ignore_mask_e] = 255
+        output3[semi_ignore_mask_ne] = 0
 
         filename = os.path.join(args.save_dir, '{}.png'.format(name[0]))
         color_file = Image.fromarray(colorize(output).transpose(1, 2, 0), 'RGB')
         color_file.save(filename)
+
+        D_out = interp(model_D(F.softmax(output2, dim=1)))#67
+        D_out_sigmoid1 = (F.sigmoid(D_out).data[0].cpu().numpy())*255.0
+        D_out_sigmoid1 = D_out_sigmoid1[:, :size[0], :size[1]]
+        semi_ignore_mask2 = (D_out_sigmoid1 < 0.1)
+        semi_ignore_mask3 = (D_out_sigmoid1 >= 0.1)
+        D_out_sigmoid1[semi_ignore_mask2] = 0
+        D_out_sigmoid1[semi_ignore_mask3] = 255
+
+        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
+        cv2.imwrite(filename2,D_out_sigmoid1.transpose(1, 2, 0))
+
+
+
+
+
 
         # show_all(gt, output)
         data_list.append([gt.flatten(), output.flatten()])
