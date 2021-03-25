@@ -265,9 +265,11 @@ def main():
         output=interp(output)
 
 
-        output2 = output
+
 
         output = output.cpu().data[0].numpy()
+
+        output2 = output
 
         output = output[:,:size[0],:size[1]]
         gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)
@@ -285,16 +287,43 @@ def main():
         color_file = Image.fromarray(colorize(output).transpose(1, 2, 0), 'RGB')
         color_file.save(filename)
 
-        D_out = interp(model_D(F.softmax(output2, dim=1)))#67
-        D_out_sigmoid1 = (F.sigmoid(D_out).data[0].cpu().numpy())*255.0
-        D_out_sigmoid1 = D_out_sigmoid1[:, :size[0], :size[1]]
-        semi_ignore_mask2 = (D_out_sigmoid1 < 0.1)
-        semi_ignore_mask3 = (D_out_sigmoid1 >= 0.1)
-        D_out_sigmoid1[semi_ignore_mask2] = 0
-        D_out_sigmoid1[semi_ignore_mask3] = 255
+        # D_out = interp(model_D(F.softmax(output2, dim=1)))#67
+        # D_out_sigmoid1 = (F.sigmoid(D_out).data[0].cpu().numpy())*255.0
+        # D_out_sigmoid1 = D_out_sigmoid1[:, :size[0], :size[1]]
+        # semi_ignore_mask2 = (D_out_sigmoid1 < 0.1)
+        # semi_ignore_mask3 = (D_out_sigmoid1 >= 0.1)
+        # D_out_sigmoid1[semi_ignore_mask2] = 0
+        # D_out_sigmoid1[semi_ignore_mask3] = 255
+        #
+        # filename2 = os.path.join('/data/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
+        # cv2.imwrite(filename2,D_out_sigmoid1.transpose(1, 2, 0))
 
-        filename2 = os.path.join('/data/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
-        cv2.imwrite(filename2,D_out_sigmoid1.transpose(1, 2, 0))
+        id=np.argmax(output2,axis=1)
+        print "id",id
+
+        print "output1",output2.size()
+
+
+        output2 = output2[:, :size[0], :size[1]]
+
+
+        print "output2",output2.size()
+
+        semi_ignore_mask2 = (output2 < 0.5)
+        semi_ignore_mask3 = (output2 >= 0.5)
+        output2[semi_ignore_mask2] = 0
+        output2[semi_ignore_mask3] = 255
+
+        filename2 = os.path.join('/data/wyc/AdvSemiSeg/gray_pred2/', '{}.png'.format(name[0]))#0 black 255 white
+        cv2.imwrite(filename2,output2.transpose(1, 2, 0))
+
+
+
+
+
+
+
+
 
 
 
