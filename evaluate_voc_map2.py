@@ -198,12 +198,12 @@ def main():
 
     model = Res_Deeplab(num_classes=args.num_classes)
     #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))
-    state_dict=torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_20000.pth')
+    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_20000.pth')
     from model.discriminator import FCDiscriminator
 
     model_D = FCDiscriminator(num_classes=args.num_classes)
 
-    state_dict_d = torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_20000_D.pth')
+    state_dict_d = torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_20000_D.pth')
 
 
     # original saved file with DataParallel
@@ -264,12 +264,15 @@ def main():
         output = model(Variable(image, volatile=True).cuda())
         output=interp(output)
 
+        output2 = F.softmax(output, dim=1).cpu().data[0].numpy()
+        label2=label[0].numpy()
+
 
 
 
         output = output.cpu().data[0].numpy()
 
-        output2 = output
+
 
         output = output[:,:size[0],:size[1]]
         gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)
@@ -298,39 +301,69 @@ def main():
         # filename2 = os.path.join('/data/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
         # cv2.imwrite(filename2,D_out_sigmoid1.transpose(1, 2, 0))
 
-        id=np.argmax(output2,axis=1)
-        print "id",id
-
-        print "output1",output2.size()
-
-
-        output2 = output2[:, :size[0], :size[1]]
-
-
-        print "output2",output2.size()
-
-        semi_ignore_mask2 = (output2 < 0.5)
-        semi_ignore_mask3 = (output2 >= 0.5)
-        output2[semi_ignore_mask2] = 0
-        output2[semi_ignore_mask3] = 255
-
-        filename2 = os.path.join('/data/wyc/AdvSemiSeg/gray_pred2/', '{}.png'.format(name[0]))#0 black 255 white
-        cv2.imwrite(filename2,output2.transpose(1, 2, 0))
+        id2=np.argmax(output2,axis=0)
+        #
+        # print label2
+        #
+        # for i in range(label2.shape[0]):
+        #     for j in range(label2.shape[1]):
+        #         if label2[i][j]==255:
+        #             label2[i][j]=0
+        #         else:
+        #             label2[i][j]=label2[i][j]
+        # print 1
+        # print id
+        # print 2
+        # print label2
 
 
 
+        # mis1=(id!=label2)+0
+        # mis2=(id==label2)+0
+        # #print set(mis2.tolist())
+        #
+        #
+        #
+        # map_mis = np.ones([id.shape[0], id.shape[1]])*255
+        # map_mis[mis2] = 0
+        #
+        # #print map_mis
+        #
+        #
+        #
+        #
+        # map_mis = map_mis[np.newaxis, :,:]
+        #
+        #
+        #
+        # map_mis = map_mis[:, :size[0], :size[1]]
+        #
+        #
+        # filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_label/', '{}.png'.format(name[0]))  # 0 black 255 white
+        # cv2.imwrite(filename2, map_mis.transpose(1, 2, 0))
+
+
+        map=np.zeros([1,id2.shape[0],id2.shape[1]])
+
+        for i in range(id2.shape[0]):
+            for j in range(id2.shape[1]):
+                map[0][i][j]=output2[id2[i][j]][i][j]
+
+
+        semi_ignore_mask2 = (map < 0.999999)
+        semi_ignore_mask3 = (map >= 0.999999)
+        map[semi_ignore_mask2] = 0
+        map[semi_ignore_mask3] = 255
+        map = map[:, :size[0], :size[1]]
+
+
+        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred2/', '{}.png'.format(name[0]))#0 black 255 white
+        cv2.imwrite(filename2,map.transpose(1, 2, 0))
 
 
 
 
 
-
-
-
-
-
-
-        # show_all(gt, output)
         data_list.append([gt.flatten(), output.flatten()])
 
     filename = os.path.join(args.save_dir, 'result.txt')

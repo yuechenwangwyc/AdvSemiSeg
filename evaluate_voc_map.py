@@ -198,12 +198,12 @@ def main():
 
     model = Res_Deeplab(num_classes=args.num_classes)
     #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))
-    state_dict=torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_20000.pth')
+    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_20000.pth')
     from model.discriminator import FCDiscriminator
 
     model_D = FCDiscriminator(num_classes=args.num_classes)
 
-    state_dict_d = torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_20000_D.pth')
+    state_dict_d = torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_20000_D.pth')
 
 
     # original saved file with DataParallel
@@ -286,14 +286,14 @@ def main():
         color_file.save(filename)
 
         D_out = interp(model_D(F.softmax(output2, dim=1)))#67
-        D_out_sigmoid1 = (F.sigmoid(D_out).data[0].cpu().numpy())*255.0
+        D_out_sigmoid1 = (F.sigmoid(D_out).data[0].cpu().numpy())
         D_out_sigmoid1 = D_out_sigmoid1[:, :size[0], :size[1]]
         semi_ignore_mask2 = (D_out_sigmoid1 < 0.1)
         semi_ignore_mask3 = (D_out_sigmoid1 >= 0.1)
         D_out_sigmoid1[semi_ignore_mask2] = 0
         D_out_sigmoid1[semi_ignore_mask3] = 255
 
-        filename2 = os.path.join('/data/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
+        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
         cv2.imwrite(filename2,D_out_sigmoid1.transpose(1, 2, 0))
 
 
