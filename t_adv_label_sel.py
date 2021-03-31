@@ -438,7 +438,19 @@ def main():
             map_line=np.expand_dims(map_line, axis=1)
             ignore_mask_new = np.expand_dims(ignore_mask, axis=1)
             D_label_new = np.zeros(ignore_mask_new.shape)
-            semi_ignore_mask_line = (map_line > 0.9999999)
+            if i_iter<10:
+                semi_ignore_mask_line = (map_line > 0.9999999)
+            elif i_iter<500:
+                semi_ignore_mask_line = (map_line > 0.99)
+            elif i_iter<1000:
+                semi_ignore_mask_line = (map_line > 0.999)
+            elif i_iter<2000:
+                semi_ignore_mask_line = (map_line > 0.9999)
+            elif i_iter<3000:
+                semi_ignore_mask_line = (map_line > 0.99999)
+            else:
+                semi_ignore_mask_line = (map_line > 0.999999)
+
             D_label_new[semi_ignore_mask_line]=1
             D_label_new[ignore_mask_new] = 255
             D_label_new = Variable(torch.FloatTensor(D_label_new)).cuda()
