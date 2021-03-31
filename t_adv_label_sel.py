@@ -435,7 +435,6 @@ def main():
                 param.requires_grad = True
 
             # train with pred
-
             pred = pred.detach()
 
             if args.D_remain:

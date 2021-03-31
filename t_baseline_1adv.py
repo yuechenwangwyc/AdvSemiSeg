@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator_mul
+from model.my_discriminator import Discriminator
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
@@ -201,7 +201,6 @@ def make_D_label(label, d_out):
 
 
 def main():
-    t=0
 
 
 
@@ -241,7 +240,7 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator_mul(num_classes=args.num_classes)
+    model_D = Discriminator(num_classes=args.num_classes)
     if args.restore_from_D is not None:
          model_D.load_state_dict(torch.load(args.restore_from_D))
     #
@@ -347,28 +346,13 @@ def main():
 
             loss_seg = loss_calc(pred, labels)
 
-########
-            D_out = model_D(torch.cat([F.softmax(pred, dim=1), images], 1))
+            D_out = model_D(torch.cat([F.softmax(pred,dim=1),images],1))
 
 
-            D_out=F.log_softmax(D_out,dim=1)
-            lab=np.zeros([D_out.size()[0],40])
-            for bat in range(D_out.size()[0]):
-                labels2 = labels[bat]
-                labels2 = labels2.view(-1)
-                labels2 = labels2.numpy().tolist()
-                set2=set(labels2)
-
-                set2.discard(255)
-                set2.discard(0)
 
 
-                for item in set2:
-                    lab[bat][int(item)-1]=1.0/len(set2)
-            lab=Variable(torch.FloatTensor(lab)).cuda()
-            loss_adv_pred = D_out*lab
-            loss_adv_pred=-torch.mean(loss_adv_pred)
-#######
+            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
+
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
 
 
@@ -393,28 +377,7 @@ def main():
 
 
             D_out =model_D(torch.cat([F.softmax(pred,dim=1),images],1))
-
-            ########
-
-            D_out = F.log_softmax(D_out, dim=1)
-            lab = np.zeros([D_out.size()[0], 40])
-            for bat in range(D_out.size()[0]):
-                labels2 = labels[bat]
-                labels2 = labels2.view(-1)
-                labels2 = labels2.numpy().tolist()
-                set2 = set(labels2)
-
-                set2.discard(255)
-                set2.discard(0)
-
-                for item in set2:
-                    lab[bat][int(item) - 1+20] = 1.0 / len(set2)
-            lab=Variable(torch.FloatTensor(lab)).cuda()
-            loss_D = D_out * lab
-            loss_D=-torch.mean(loss_D)
-            #######
-
-            #loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
+            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -429,41 +392,12 @@ def main():
                 _, batch = trainloader_gt_iter.next()
 
             img2, labels_gt, _, _ = batch
+            img2=Variable(img2).cuda()
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            img2 = Variable(img2).cuda()
-
-
-
-
-
             D_out = model_D(torch.cat([D_gt_v,img2],1))
-
-            ########
-
-            D_out = F.log_softmax(D_out, dim=1)
-            lab = np.zeros([D_out.size()[0], 40])
-            for bat in range(D_out.size()[0]):
-                labels2 = labels_gt[bat]
-                labels2 = labels2.view(-1)
-                labels2 = labels2.numpy().tolist()
-                set2=set(labels2)
-
-
-                set2.discard(255)
-                set2.discard(0)
-
-                for item in set2:
-                    lab[bat][int(item) - 1] = 1.0 / len(set2)
-            lab=Variable(torch.FloatTensor(lab)).cuda()
-            loss_D = D_out * lab
-            loss_D=-torch.mean(loss_D)
-            #######
-
-
-
-            #loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
+            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -472,11 +406,6 @@ def main():
 
         optimizer.step()
         optimizer_D.step()
-
-        # torch.save(model.state_dict(), osp.join(args.snapshot_dir,
-        #                                         'VOC_' + os.path.abspath(__file__).split('/')[-1] + '_' + str(
-        #                                             args.num_steps) + '.pth'))
-
 
         print('exp = {}'.format(args.snapshot_dir))
         print('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))

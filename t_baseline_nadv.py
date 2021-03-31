@@ -16,9 +16,9 @@ import os.path as osp
 import pickle
 from packaging import version
 
-from model.deeplab import Res_Deeplab
-from model.discriminator import FCDiscriminator
-from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
+from model.my_deeplab import Res_Deeplab
+from model.my_discriminator import Discriminator_mul
+from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
 
@@ -26,6 +26,9 @@ from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 import matplotlib.pyplot as plt
 import random
 import timeit
+
+
+
 start = timeit.default_timer()
 
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
@@ -188,10 +191,10 @@ def one_hot(label):
     #handle ignore labels
     return torch.FloatTensor(one_hot)
 
-def make_D_label(label, ignore_mask):
-    ignore_mask = np.expand_dims(ignore_mask, axis=1)
-    D_label = np.ones(ignore_mask.shape)*label
-    D_label[ignore_mask] = 255
+def make_D_label(label, d_out):
+
+    D_label = np.ones(d_out.size())*label
+
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
 
     return D_label
@@ -237,13 +240,13 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    # model_D = FCDiscriminator(num_classes=args.num_classes)
-    # if args.restore_from_D is not None:
-    #     model_D.load_state_dict(torch.load(args.restore_from_D))
+    model_D = Discriminator_mul(num_classes=args.num_classes)
+    if args.restore_from_D is not None:
+         model_D.load_state_dict(torch.load(args.restore_from_D))
     #
-    # model_D = nn.DataParallel(model_D)
-    # model_D.train()
-    # model_D.cuda()
+    model_D = nn.DataParallel(model_D)
+    model_D.train()
+    model_D.cuda()
 
 
     if not os.path.exists(args.snapshot_dir):
@@ -268,34 +271,11 @@ def main():
 
         #sample partial data
         partial_size = int(args.partial_data * train_dataset_size)
-        '''
 
-        if args.partial_id is not None:
-            train_ids = pickle.load(open(args.partial_id))
-            print('loading train ids from {}'.format(args.partial_id))
-        else:
-            train_ids = list(range(train_dataset_size))
-            np.random.shuffle(train_ids)
-
-        pickle.dump(train_ids, open(osp.join(args.snapshot_dir, 'train_id.pkl'), 'wb'))
-
-        train_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
-        train_remain_sampler = data.sampler.SubsetRandomSampler(train_ids[partial_size:])
-        train_gt_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
-
-        trainloader = data.DataLoader(train_dataset,
-                        batch_size=args.batch_size, sampler=train_sampler, num_workers=3, pin_memory=True)
-        trainloader_remain = data.DataLoader(train_dataset,
-                        batch_size=args.batch_size, sampler=train_remain_sampler, num_workers=3, pin_memory=True)
-        trainloader_gt = data.DataLoader(train_gt_dataset,
-                        batch_size=args.batch_size, sampler=train_gt_sampler, num_workers=3, pin_memory=True)
-
-        trainloader_remain_iter = enumerate(trainloader_remain)
-        '''
 
 
     trainloader_iter = enumerate(trainloader)
-    trainloader_gt_iter = enumerate(trainloader_gt)
+
 
 
     # implement model.optim_parameters(args) to handle different models' lr setting
@@ -306,8 +286,8 @@ def main():
     optimizer.zero_grad()
 
     # optimizer for discriminator network
-    # optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
-    # optimizer_D.zero_grad()
+    optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
+    optimizer_D.zero_grad()
 
     # loss/ bilinear upsampling
     bce_loss = BCEWithLogitsLoss2d()
@@ -324,6 +304,7 @@ def main():
     gt_label = 1
 
 
+
     for i_iter in range(args.num_steps):
 
         loss_seg_value = 0
@@ -334,8 +315,8 @@ def main():
 
         optimizer.zero_grad()
         adjust_learning_rate(optimizer, i_iter)
-        # optimizer_D.zero_grad()
-        # adjust_learning_rate_D(optimizer_D, i_iter)
+        optimizer_D.zero_grad()
+        adjust_learning_rate_D(optimizer_D, i_iter)
 
         for sub_i in range(args.iter_size):
 
@@ -343,65 +324,10 @@ def main():
             # train G
 
             # don't accumulate grads in D
-            # for param in model_D.parameters():
-            #     param.requires_grad = False
+            for param in model_D.parameters():
+                param.requires_grad = False
 
             # do semi first
-            '''
-            if (args.lambda_semi > 0 or args.lambda_semi_adv > 0 ) and i_iter >= args.semi_start_adv :
-                try:
-                    _, batch = trainloader_remain_iter.next()
-                except:
-                    trainloader_remain_iter = enumerate(trainloader_remain)
-                    _, batch = trainloader_remain_iter.next()
-
-                # only access to img
-                images, _, _, _ = batch
-                images = Variable(images).cuda()
-
-
-                pred = interp(model(images))
-                pred_remain = pred.detach()
-
-                D_out = interp(model_D(F.softmax(pred)))
-                D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
-
-                ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
-
-                loss_semi_adv = args.lambda_semi_adv * bce_loss(D_out, make_D_label(gt_label, ignore_mask_remain))
-                loss_semi_adv = loss_semi_adv/args.iter_size
-
-                #loss_semi_adv.backward()
-                loss_semi_adv_value += loss_semi_adv.data.cpu().numpy()[0]/args.lambda_semi_adv
-
-                if args.lambda_semi <= 0 or i_iter < args.semi_start:
-                    loss_semi_adv.backward()
-                    loss_semi_value = 0
-                else:
-                    # produce ignore mask
-                    semi_ignore_mask = (D_out_sigmoid < args.mask_T)
-
-                    semi_gt = pred.data.cpu().numpy().argmax(axis=1)
-                    semi_gt[semi_ignore_mask] = 255
-
-                    semi_ratio = 1.0 - float(semi_ignore_mask.sum())/semi_ignore_mask.size
-                    print('semi ratio: {:.4f}'.format(semi_ratio))
-
-                    if semi_ratio == 0.0:
-                        loss_semi_value += 0
-                    else:
-                        semi_gt = torch.FloatTensor(semi_gt)
-
-                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)
-                        loss_semi = loss_semi/args.iter_size
-                        loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
-                        loss_semi += loss_semi_adv
-                        loss_semi.backward()
-
-            else:
-                loss_semi = None
-                loss_semi_adv = None
-            '''
 
             # train with source
 
@@ -414,70 +340,142 @@ def main():
             images, labels, _, _ = batch
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
+
             pred = interp(model(images))
+
 
             loss_seg = loss_calc(pred, labels)
 
-            # D_out = interp(model_D(F.softmax(pred)))
+########
+            D_out = model_D(torch.cat([F.softmax(pred, dim=1), images], 1))
 
-            # loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
-            # loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
+            D_out=F.log_softmax(D_out,dim=1)
+            lab=np.zeros([D_out.size()[0],40])
+            for bat in range(D_out.size()[0]):
+                labels2 = labels[bat]
+                labels2 = labels2.view(-1)
+                labels2 = labels2.numpy().tolist()
+                set2=set(labels2)
 
-            loss = loss_seg
+                set2.discard(255)
+                set2.discard(0)
+
+
+                for item in set2:
+                    lab[bat][int(item)-1]=1.0/len(set2)
+            lab=Variable(torch.FloatTensor(lab)).cuda()
+            loss_adv_pred = D_out*lab
+            loss_adv_pred=-torch.mean(loss_adv_pred)
+#######
+            loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
+
+
 
             # proper normalization
             loss = loss/args.iter_size
+
             loss.backward()
             loss_seg_value += loss_seg.data.cpu().numpy()[0]/args.iter_size
-            # loss_adv_pred_value += loss_adv_pred.data.cpu().numpy()[0]/args.iter_size
+            loss_adv_pred_value += loss_adv_pred.data.cpu().numpy()[0]/args.iter_size
 
 
             # train D
 
-            # # bring back requires_grad
-            # for param in model_D.parameters():
-            #     param.requires_grad = True
-            #
-            # # train with pred
-            # pred = pred.detach()
-            #
-            # '''
-            #
-            # if args.D_remain:
-            #     pred = torch.cat((pred, pred_remain), 0)
-            #     ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
-            # '''
-            #
-            # D_out = interp(model_D(F.softmax(pred)))
-            # loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
-            # loss_D = loss_D/args.iter_size/2
-            # loss_D.backward()
-            # loss_D_value += loss_D.data.cpu().numpy()[0]
-            #
-            #
-            # # train with gt
-            # # get gt labels
-            # try:
-            #     _, batch = trainloader_gt_iter.next()
-            # except:
-            #     trainloader_gt_iter = enumerate(trainloader_gt)
-            #     _, batch = trainloader_gt_iter.next()
-            #
-            # _, labels_gt, _, _ = batch
-            # D_gt_v = Variable(one_hot(labels_gt)).cuda()
-            # ignore_mask_gt = (labels_gt.numpy() == 255)
-            #
-            # D_out = interp(model_D(D_gt_v))
-            # loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
-            # loss_D = loss_D/args.iter_size/2
-            # loss_D.backward()
-            # loss_D_value += loss_D.data.cpu().numpy()[0]
+            # bring back requires_grad
+            for param in model_D.parameters():
+                param.requires_grad = True
+
+            # train with pred
+            pred = pred.detach()
+
+
+
+            D_out =model_D(torch.cat([F.softmax(pred,dim=1),images],1))
+
+            ########
+
+            D_out = F.log_softmax(D_out, dim=1)
+            lab = np.zeros([D_out.size()[0], 40])
+            for bat in range(D_out.size()[0]):
+                labels2 = labels[bat]
+                labels2 = labels2.view(-1)
+                labels2 = labels2.numpy().tolist()
+                set2 = set(labels2)
+
+                set2.discard(255)
+                set2.discard(0)
+
+                for item in set2:
+                    lab[bat][int(item) - 1+20] = 1.0 / len(set2)
+            lab=Variable(torch.FloatTensor(lab)).cuda()
+            loss_D = D_out * lab
+            loss_D=-torch.mean(loss_D)
+            #######
+
+            #loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
+            loss_D = loss_D/args.iter_size/2
+            loss_D.backward()
+            loss_D_value += loss_D.data.cpu().numpy()[0]
+
+
+            # train with gt
+            # get gt labels
+            try:
+                _, batch = trainloader_gt_iter.next()
+            except:
+                trainloader_gt_iter = enumerate(trainloader_gt)
+                _, batch = trainloader_gt_iter.next()
+
+            img2, labels_gt, _, _ = batch
+            D_gt_v = Variable(one_hot(labels_gt)).cuda()
+            ignore_mask_gt = (labels_gt.numpy() == 255)
+
+            img2 = Variable(img2).cuda()
+
+
+
+
+
+            D_out = model_D(torch.cat([D_gt_v,img2],1))
+
+            ########
+
+            D_out = F.log_softmax(D_out, dim=1)
+            lab = np.zeros([D_out.size()[0], 40])
+            for bat in range(D_out.size()[0]):
+                labels2 = labels_gt[bat]
+                labels2 = labels2.view(-1)
+                labels2 = labels2.numpy().tolist()
+                set2=set(labels2)
+
+
+                set2.discard(255)
+                set2.discard(0)
+
+                for item in set2:
+                    lab[bat][int(item) - 1] = 1.0 / len(set2)
+            lab=Variable(torch.FloatTensor(lab)).cuda()
+            loss_D = D_out * lab
+            loss_D=-torch.mean(loss_D)
+            #######
+
+
+
+            #loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
+            loss_D = loss_D/args.iter_size/2
+            loss_D.backward()
+            loss_D_value += loss_D.data.cpu().numpy()[0]
 
 
 
         optimizer.step()
-        # optimizer_D.step()
+        optimizer_D.step()
+
+        # torch.save(model.state_dict(), osp.join(args.snapshot_dir,
+        #                                         'VOC_' + os.path.abspath(__file__).split('/')[-1] + '_' + str(
+        #                                             args.num_steps) + '.pth'))
+
 
         print('exp = {}'.format(args.snapshot_dir))
         print('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))

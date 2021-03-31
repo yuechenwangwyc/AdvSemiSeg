@@ -83,7 +83,7 @@ def get_arguments():
                         help="Path to the directory containing the PASCAL VOC dataset.")
     parser.add_argument("--data-list", type=str, default=DATA_LIST_PATH,
                         help="Path to the file listing the images in the dataset.")
-    parser.add_argument("--partial-data", type=float, default=0.125,
+    parser.add_argument("--partial-data", type=float, default=PARTIAL_DATA,
                         help="The index of the label to ignore during the training.")
     parser.add_argument("--partial-id", type=str, default=None,
                         help="restore partial id list")
@@ -97,15 +97,15 @@ def get_arguments():
                         help="Base learning rate for training with polynomial decay.")
     parser.add_argument("--learning-rate-D", type=float, default=LEARNING_RATE_D,
                         help="Base learning rate for discriminator.")
-    parser.add_argument("--lambda-adv-pred", type=float, default=0.01,
+    parser.add_argument("--lambda-adv-pred", type=float, default=LAMBDA_ADV_PRED,
                         help="lambda_adv for adversarial training.")
-    parser.add_argument("--lambda-semi", type=float, default=0.1,
+    parser.add_argument("--lambda-semi", type=float, default=LAMBDA_SEMI,
                         help="lambda_semi for adversarial training.")
     parser.add_argument("--lambda-semi-adv", type=float, default=LAMBDA_SEMI_ADV,
                         help="lambda_semi for adversarial training.")
-    parser.add_argument("--mask-T", type=float, default=0.2,
+    parser.add_argument("--mask-T", type=float, default=MASK_T,
                         help="mask T for semi adversarial training.")
-    parser.add_argument("--semi-start", type=int, default=5000,
+    parser.add_argument("--semi-start", type=int, default=SEMI_START,
                         help="start semi learning after # iterations")
     parser.add_argument("--semi-start-adv", type=int, default=SEMI_START_ADV,
                         help="start semi learning after # iterations")
@@ -117,7 +117,7 @@ def get_arguments():
                         help="Whether to not restore last (FC) layers.")
     parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,
                         help="Number of classes to predict (including background).")
-    parser.add_argument("--num-steps", type=int, default=20000,
+    parser.add_argument("--num-steps", type=int, default=NUM_STEPS,
                         help="Number of training steps.")
     parser.add_argument("--power", type=float, default=POWER,
                         help="Decay parameter to compute the learning rate.")
@@ -135,7 +135,7 @@ def get_arguments():
                         help="How many images to save.")
     parser.add_argument("--save-pred-every", type=int, default=SAVE_PRED_EVERY,
                         help="Save summaries and checkpoint every often.")
-    parser.add_argument("--snapshot-dir", type=str, default='snapshots',
+    parser.add_argument("--snapshot-dir", type=str, default=SNAPSHOT_DIR,
                         help="Where to save snapshots of the model.")
     parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY,
                         help="Regularisation parameter for L2-loss.")
@@ -214,20 +214,17 @@ def main():
     else:
         saved_state_dict = torch.load(args.restore_from)
 
-    # only copy the params that exist in currendt model (caffe-like)
+    # only copy the params that exist in current model (caffe-like)
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
         print (name)
         if name in saved_state_dict and param.size() == saved_state_dict[name].size():
             new_params[name].copy_(saved_state_dict[name])
             print('copy {}'.format(name))
-
     model.load_state_dict(new_params)
 
 
     model.train()
-
-
     model=nn.DataParallel(model)
     model.cuda()
 
@@ -238,7 +235,6 @@ def main():
     model_D = FCDiscriminator(num_classes=args.num_classes)
     if args.restore_from_D is not None:
         model_D.load_state_dict(torch.load(args.restore_from_D))
-
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
@@ -334,7 +330,6 @@ def main():
 
         for sub_i in range(args.iter_size):
 
-
             # train G
 
             # don't accumulate grads in D
@@ -359,7 +354,6 @@ def main():
 
                 D_out = interp(model_D(F.softmax(pred,dim=1)))
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
-
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
 
@@ -439,10 +433,6 @@ def main():
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
 
             D_out = interp(model_D(F.softmax(pred,dim=1)))
-
-
-
-
             loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
@@ -477,14 +467,14 @@ def main():
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'.pth'))
-            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')

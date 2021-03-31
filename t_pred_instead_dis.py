@@ -8,7 +8,7 @@ import pickle
 from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
-import scipy.misc
+#import scipy.miscv
 import torch.backends.cudnn as cudnn
 import sys
 import os
@@ -16,9 +16,9 @@ import os.path as osp
 import pickle
 from packaging import version
 
-from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator
-from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
+from model.deeplab import Res_Deeplab
+from model.discriminator import FCDiscriminator
+from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
 
@@ -188,18 +188,16 @@ def one_hot(label):
     #handle ignore labels
     return torch.FloatTensor(one_hot)
 
-def make_D_label(label, d_out):
-
-    D_label = np.ones(d_out.size())*label
-
+def make_D_label(label, ignore_mask):
+    ignore_mask = np.expand_dims(ignore_mask, axis=1)
+    D_label = np.ones(ignore_mask.shape)*label
+    D_label[ignore_mask] = 255
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
 
     return D_label
 
 
 def main():
-
-
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
@@ -237,10 +235,10 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator(num_classes=args.num_classes)
+    model_D = FCDiscriminator(num_classes=args.num_classes)
     if args.restore_from_D is not None:
-         model_D.load_state_dict(torch.load(args.restore_from_D))
-    #
+        model_D.load_state_dict(torch.load(args.restore_from_D))
+
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
@@ -258,21 +256,41 @@ def main():
     train_gt_dataset = VOCGTDataSet(args.data_dir, args.data_list, crop_size=input_size,
                        scale=args.random_scale, mirror=args.random_mirror, mean=IMG_MEAN)
 
-    if args.partial_data ==0:
+    if args.partial_data is None:
         trainloader = data.DataLoader(train_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=5, pin_memory=True)
 
         trainloader_gt = data.DataLoader(train_gt_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=5, pin_memory=True)
     else:
-
         #sample partial data
         partial_size = int(args.partial_data * train_dataset_size)
 
+        if args.partial_id is not None:
+            train_ids = pickle.load(open(args.partial_id))
+            print('loading train ids from {}'.format(args.partial_id))
+        else:
+            train_ids = list(range(train_dataset_size))
+            np.random.shuffle(train_ids)
+
+        pickle.dump(train_ids, open(osp.join(args.snapshot_dir, 'train_id.pkl'), 'wb'))
+
+        train_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
+        train_remain_sampler = data.sampler.SubsetRandomSampler(train_ids[partial_size:])
+        train_gt_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
+
+        trainloader = data.DataLoader(train_dataset,
+                        batch_size=args.batch_size, sampler=train_sampler, num_workers=3, pin_memory=True)
+        trainloader_remain = data.DataLoader(train_dataset,
+                        batch_size=args.batch_size, sampler=train_remain_sampler, num_workers=3, pin_memory=True)
+        trainloader_gt = data.DataLoader(train_gt_dataset,
+                        batch_size=args.batch_size, sampler=train_gt_sampler, num_workers=3, pin_memory=True)
+
+        trainloader_remain_iter = enumerate(trainloader_remain)
 
 
     trainloader_iter = enumerate(trainloader)
-
+    trainloader_gt_iter = enumerate(trainloader_gt)
 
 
     # implement model.optim_parameters(args) to handle different models' lr setting
@@ -301,7 +319,6 @@ def main():
     gt_label = 1
 
 
-
     for i_iter in range(args.num_steps):
 
         loss_seg_value = 0
@@ -325,6 +342,74 @@ def main():
                 param.requires_grad = False
 
             # do semi first
+            if (args.lambda_semi > 0 or args.lambda_semi_adv > 0 ) and i_iter >= args.semi_start_adv :
+                try:
+                    _, batch = trainloader_remain_iter.next()
+                except:
+                    trainloader_remain_iter = enumerate(trainloader_remain)
+                    _, batch = trainloader_remain_iter.next()
+
+                # only access to img
+                images, _, _, _ = batch
+                images = Variable(images).cuda()
+
+
+                pred = interp(model(images))
+                pred_remain = pred.detach()
+
+                mask1=F.softmax(pred,dim=1).data.cpu().numpy()
+
+                id2 = np.argmax(mask1, axis=1)#10, 321, 321)
+
+
+                D_out = interp(model_D(F.softmax(pred,dim=1)))
+                D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
+
+
+                ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
+
+                loss_semi_adv = args.lambda_semi_adv * bce_loss(D_out, make_D_label(gt_label, ignore_mask_remain))
+                loss_semi_adv = loss_semi_adv/args.iter_size
+
+                #loss_semi_adv.backward()
+                loss_semi_adv_value += loss_semi_adv.data.cpu().numpy()[0]/args.lambda_semi_adv
+
+                if args.lambda_semi <= 0 or i_iter < args.semi_start:
+                    loss_semi_adv.backward()
+                    loss_semi_value = 0
+                else:
+                    # produce ignore mask
+                    semi_ignore_mask = (D_out_sigmoid < args.mask_T)
+                    #print semi_ignore_mask.shape 10,321,321
+
+                    map2 = np.zeros([pred.size()[0], id2.shape[1], id2.shape[2]])
+                    for k in  range(pred.size()[0]):
+                        for i in range(id2.shape[1]):
+                            for j in range(id2.shape[2]):
+                               map2[k][i][j] = mask1[k][id2[k][i][j]][i][j]
+
+
+                    semi_ignore_mask = (map2 <  0.999999)
+                    semi_gt = pred.data.cpu().numpy().argmax(axis=1)
+                    semi_gt[semi_ignore_mask] = 255
+
+                    semi_ratio = 1.0 - float(semi_ignore_mask.sum())/semi_ignore_mask.size
+                    print('semi ratio: {:.4f}'.format(semi_ratio))
+
+                    if semi_ratio == 0.0:
+                        loss_semi_value += 0
+                    else:
+                        semi_gt = torch.FloatTensor(semi_gt)
+
+                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)
+                        loss_semi = loss_semi/args.iter_size
+                        loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
+                        loss_semi += loss_semi_adv
+                        loss_semi.backward()
+
+            else:
+                loss_semi = None
+                loss_semi_adv = None
 
             # train with source
 
@@ -341,16 +426,11 @@ def main():
 
             loss_seg = loss_calc(pred, labels)
 
-            D_out = model_D(torch.cat([F.softmax(pred,dim=1),images],1))
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
 
-
-
-
-            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
+            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
-
-
 
             # proper normalization
             loss = loss/args.iter_size
@@ -368,10 +448,13 @@ def main():
             # train with pred
             pred = pred.detach()
 
+            if args.D_remain:
+                pred = torch.cat((pred, pred_remain), 0)
+                ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
 
 
-            D_out =model_D(torch.cat([F.softmax(pred,dim=1),images],1))
-            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
+            loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -385,13 +468,12 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            img2, labels_gt, _, _ = batch
-            img2=Variable(img2).cuda()
+            _, labels_gt, _, _ = batch
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = model_D(torch.cat([D_gt_v,img2],1))
-            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
+            D_out = interp(model_D(D_gt_v))
+            loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -406,14 +488,14 @@ def main():
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1]+'_'+str(args.num_steps)+'.pth'))
-            #torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
-            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1]+'_'+str(i_iter)+'.pth'))
-            #torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
+            torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')
