@@ -8,7 +8,7 @@ import pickle
 from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
-#import scipy.miscv
+#import scipy.misc
 import torch.backends.cudnn as cudnn
 import sys
 import os
@@ -439,6 +439,10 @@ def main():
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
 
             D_out = interp(model_D(F.softmax(pred,dim=1)))
+
+
+
+
             loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()

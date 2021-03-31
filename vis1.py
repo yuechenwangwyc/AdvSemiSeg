@@ -266,14 +266,7 @@ def main():
 
         output2 = F.softmax(output, dim=1).cpu().data[0].numpy()
         label2=label[0].numpy()
-
-
-
-
         output = output.cpu().data[0].numpy()
-
-
-
         output = output[:,:size[0],:size[1]]
         gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)
 
@@ -286,7 +279,11 @@ def main():
         output3[semi_ignore_mask_e] = 255
         output3[semi_ignore_mask_ne] = 0
 
-        filename = os.path.join(args.save_dir, '{}.png'.format(name[0]))
+        # filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred3/', '{}.png'.format(name[0]))
+        # print output3.shape
+        # cv2.imwrite(filename2,output3.transpose(1, 2, 0))
+
+        filename = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred_adv/', '{}.png'.format(name[0]))
         color_file = Image.fromarray(colorize(output).transpose(1, 2, 0), 'RGB')
         color_file.save(filename)
 
@@ -359,10 +356,6 @@ def main():
 
         filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred2/', '{}.png'.format(name[0]))#0 black 255 white
         cv2.imwrite(filename2,map.transpose(1, 2, 0))
-
-
-
-
 
         data_list.append([gt.flatten(), output.flatten()])
 
