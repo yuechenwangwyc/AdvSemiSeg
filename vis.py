@@ -263,45 +263,63 @@ def main():
         size = size[0].numpy()
         output = model(Variable(image, volatile=True).cuda())
         output=interp(output)
-
-
-        output2 = output
-
+        output_dout = output.clone()
+        output_pred = F.softmax(output, dim=1).cpu().data[0].numpy()
+        label2=label[0].numpy()
         output = output.cpu().data[0].numpy()
-
         output = output[:,:size[0],:size[1]]
         gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)
-
         output = output.transpose(1,2,0)
         output = np.asarray(np.argmax(output, axis=2), dtype=np.int)
-        output3=output
 
-        semi_ignore_mask_e = (output == gt)
-        semi_ignore_mask_ne= (output != gt)
-        output3[semi_ignore_mask_e] = 255
-        output3[semi_ignore_mask_ne] = 0
-
+        #"""pred result"""
         filename = os.path.join(args.save_dir, '{}.png'.format(name[0]))
         color_file = Image.fromarray(colorize(output).transpose(1, 2, 0), 'RGB')
         color_file.save(filename)
 
-        D_out = interp(model_D(F.softmax(output2, dim=1)))#67
-        D_out_sigmoid1 = (F.sigmoid(D_out).data[0].cpu().numpy())
-        D_out_sigmoid1 = D_out_sigmoid1[:, :size[0], :size[1]]
-        semi_ignore_mask2 = (D_out_sigmoid1 < 0.1)
-        semi_ignore_mask3 = (D_out_sigmoid1 >= 0.1)
-        D_out_sigmoid1[semi_ignore_mask2] = 0
-        D_out_sigmoid1[semi_ignore_mask3] = 255
 
-        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/gray_pred/', '{}.png'.format(name[0]))#0 black 255 white
-        cv2.imwrite(filename2,D_out_sigmoid1.transpose(1, 2, 0))
-
-
+        #"""the area of the pred which is wrong"""
+        output_mistake=np.zeros(output.shape)
+        semi_ignore_mask_correct = (output == gt)
+        semi_ignore_mask_255=(gt==255)
+        output_mistake[semi_ignore_mask_correct] = 255
+        output_mistake[semi_ignore_mask_255] = 255
+        output_mistake = np.expand_dims(output_mistake, axis=2)
+        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/pred_mis/', '{}.png'.format(name[0]))
+        cv2.imwrite(filename2, output_mistake)
 
 
 
+        #"""dis confidence map decide line of pred map"""
+        D_out = interp(model_D(F.softmax(output_dout, dim=1)))#67
+        D_out_sigmoid = (F.sigmoid(D_out).data[0].cpu().numpy())
+        D_out_sigmoid = D_out_sigmoid[:, :size[0], :size[1]]
+        semi_ignore_mask_dout0 = (D_out_sigmoid < 0.1)
+        semi_ignore_mask_dout255 = (D_out_sigmoid >= 0.1)
+        D_out_sigmoid[semi_ignore_mask_dout0] = 0
+        D_out_sigmoid[semi_ignore_mask_dout255] = 255
+        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/confidence_line/', '{}.png'.format(name[0]))#0 black 255 white
+        cv2.imwrite(filename2,D_out_sigmoid.transpose(1, 2, 0))
 
-        # show_all(gt, output)
+
+        #""""pred max decide line of pred map"""
+        id2 = np.argmax(output_pred, axis=0)
+        map=np.zeros([1,id2.shape[0],id2.shape[1]])
+        for i in range(id2.shape[0]):
+            for j in range(id2.shape[1]):
+                map[0][i][j]=output_pred[id2[i][j]][i][j]
+        semi_ignore_mask2 = (map < 0.999999)
+        semi_ignore_mask3 = (map >= 0.999999)
+        map[semi_ignore_mask2] = 0
+        map[semi_ignore_mask3] = 255
+        map = map[:, :size[0], :size[1]]
+        filename2 = os.path.join('/data1/wyc/AdvSemiSeg/pred_line/', '{}.png'.format(name[0]))#0 black 255 white
+        cv2.imwrite(filename2,map.transpose(1, 2, 0))
+
+
+
+
+
         data_list.append([gt.flatten(), output.flatten()])
 
     filename = os.path.join(args.save_dir, 'result.txt')
