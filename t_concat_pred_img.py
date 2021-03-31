@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.deeplab import Res_Deeplab
-from model.discriminator import FCDiscriminator
+from model.discriminator_concat import FCDiscriminator
 from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
@@ -351,8 +351,8 @@ def main():
 
                 pred = interp(model(images))
                 pred_remain = pred.detach()
-
-                D_out = interp(model_D(F.softmax(pred,dim=1)))
+                img_remain=images.detach()
+                D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
@@ -406,7 +406,9 @@ def main():
 
             loss_seg = loss_calc(pred, labels)
 
-            D_out = interp(model_D(F.softmax(pred,dim=1)))
+            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
+
+
 
             loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
@@ -431,19 +433,11 @@ def main():
             if args.D_remain:
                 pred = torch.cat((pred, pred_remain), 0)
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
+                img_concat=torch.cat((images, img_remain), 0)
 
-            D_out = interp(model_D(F.softmax(pred,dim=1)))
-            pred_softmax = F.softmax(pred, dim=1).data.cpu().numpy()
-            map_line = np.amax(pred_softmax, axis=1)
-            map_line=np.expand_dims(map_line, axis=1)
-            ignore_mask_new = np.expand_dims(ignore_mask, axis=1)
-            D_label_new = np.zeros(ignore_mask_new.shape)
-            semi_ignore_mask_line = (map_line > 0.9999999)
-            D_label_new[semi_ignore_mask_line]=1
-            D_label_new[ignore_mask_new] = 255
-            D_label_new = Variable(torch.FloatTensor(D_label_new)).cuda()
+            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), img_concat], 1)))
 
-            loss_D = bce_loss(D_out, D_label_new)
+            loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -457,11 +451,12 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            _, labels_gt, _, _ = batch
+            img_gt, labels_gt, _, _ = batch
+            img_gt = Variable(img_gt).cuda()
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = interp(model_D(D_gt_v))
+            D_out = interp(model_D(torch.cat([D_gt_v, img_gt], 1)))
             loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()

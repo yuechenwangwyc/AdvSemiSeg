@@ -26,9 +26,6 @@ from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 import matplotlib.pyplot as plt
 import random
 import timeit
-
-
-
 start = timeit.default_timer()
 
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
