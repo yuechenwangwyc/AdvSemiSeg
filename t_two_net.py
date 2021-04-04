@@ -17,10 +17,11 @@ import pickle
 from packaging import version
 
 from model.deeplab import Res_Deeplab
-from model.discriminator_concat import FCDiscriminator
+from model.discriminator import FCDiscriminator
 from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
-import logging
+
+
 
 import matplotlib.pyplot as plt
 import random
@@ -38,6 +39,8 @@ DATA_LIST_PATH = './dataset/voc_list/train_aug.txt'
 IGNORE_LABEL = 255
 INPUT_SIZE = '321,321'
 LEARNING_RATE = 2.5e-4
+LEARNING_RATE2 = 2.5e-4*0.5
+
 MOMENTUM = 0.9
 NUM_CLASSES = 21
 NUM_STEPS = 20000
@@ -47,10 +50,10 @@ RESTORE_FROM = 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/resnet101COCO-41f
 SAVE_NUM_IMAGES = 2
 SAVE_PRED_EVERY = 5000
 SNAPSHOT_DIR = './snapshots/'
-
 WEIGHT_DECAY = 0.0005
 
 LEARNING_RATE_D = 1e-4
+LEARNING_RATE_D2 = 1e-4*0.5
 LAMBDA_ADV_PRED = 0.1
 
 PARTIAL_DATA=0.5
@@ -62,22 +65,6 @@ MASK_T=0.2
 LAMBDA_SEMI_ADV=0.001
 SEMI_START_ADV=0
 D_REMAIN=True
-
-
-def get_log(file_name):
-    logger = logging.getLogger('train')
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    fh = logging.FileHandler(file_name, mode='a')
-    fh.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(message)s')
-    ch.setFormatter(formatter)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-    return logger
-
 
 
 def get_arguments():
@@ -112,6 +99,10 @@ def get_arguments():
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE,
                         help="Base learning rate for training with polynomial decay.")
     parser.add_argument("--learning-rate-D", type=float, default=LEARNING_RATE_D,
+                        help="Base learning rate for discriminator.")
+    parser.add_argument("--learning-rate2", type=float, default=LEARNING_RATE2,
+                        help="Base learning rate for training with polynomial decay.")
+    parser.add_argument("--learning-rate-D2", type=float, default=LEARNING_RATE_D2,
                         help="Base learning rate for discriminator.")
     parser.add_argument("--lambda-adv-pred", type=float, default=LAMBDA_ADV_PRED,
                         help="lambda_adv for adversarial training.")
@@ -169,7 +160,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
-    """
+    """r
+
     This function returns cross entropy loss for semantic segmentation
     """
     # out shape batch_size x channels x h x w -> batch_size x channels x h x w
@@ -190,8 +182,20 @@ def adjust_learning_rate(optimizer, i_iter):
     if len(optimizer.param_groups) > 1 :
         optimizer.param_groups[1]['lr'] = lr * 10
 
+def adjust_learning_rate2(optimizer, i_iter):
+    lr = lr_poly(args.learning_rate2, i_iter, args.num_steps, args.power)
+    optimizer.param_groups[0]['lr'] = lr
+    if len(optimizer.param_groups) > 1 :
+        optimizer.param_groups[1]['lr'] = lr * 10
+
 def adjust_learning_rate_D(optimizer, i_iter):
     lr = lr_poly(args.learning_rate_D, i_iter, args.num_steps, args.power)
+    optimizer.param_groups[0]['lr'] = lr
+    if len(optimizer.param_groups) > 1 :
+        optimizer.param_groups[1]['lr'] = lr * 10
+
+def adjust_learning_rate_D2(optimizer, i_iter):
+    lr = lr_poly(args.learning_rate_D2, i_iter, args.num_steps, args.power)
     optimizer.param_groups[0]['lr'] = lr
     if len(optimizer.param_groups) > 1 :
         optimizer.param_groups[1]['lr'] = lr * 10
@@ -214,12 +218,6 @@ def make_D_label(label, ignore_mask):
 
 
 def main():
-    log_dir = './log/'
-    log_file=osp.join(log_dir,os.path.abspath(__file__).split('/')[-1].split('.')[0]+'.txt')
-    if os.path.isfile(log_file):
-        os.remove(log_file)
-    logger = get_log(log_file)
-    logger.info( 'semi_start = {0:8d}'.format(args.semi_start))
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
@@ -229,6 +227,7 @@ def main():
 
     # create network
     model = Res_Deeplab(num_classes=args.num_classes)
+    model2 = Res_Deeplab(num_classes=args.num_classes)
 
     # load pretrained parameters
     if args.restore_from[:4] == 'http' :
@@ -250,6 +249,18 @@ def main():
     model=nn.DataParallel(model)
     model.cuda()
 
+    new_params2 = model2.state_dict().copy()
+    for name, param in new_params2.items():
+        print (name)
+        if name in saved_state_dict and param.size() == saved_state_dict[name].size():
+            new_params2[name].copy_(saved_state_dict[name])
+            print('copy {}'.format(name))
+    model2.load_state_dict(new_params2)
+
+    model2.train()
+    model2 = nn.DataParallel(model2)
+    model2.cuda()
+
 
     cudnn.benchmark = True
 
@@ -260,6 +271,13 @@ def main():
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
+
+    model_D2 = FCDiscriminator(num_classes=args.num_classes)
+    if args.restore_from_D is not None:
+        model_D2.load_state_dict(torch.load(args.restore_from_D))
+    model_D2 = nn.DataParallel(model_D2)
+    model_D2.train()
+    model_D2.cuda()
 
 
     if not os.path.exists(args.snapshot_dir):
@@ -322,6 +340,14 @@ def main():
     optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
     optimizer_D.zero_grad()
 
+    optimizer2 = optim.SGD(model2.module.optim_parameters(args),
+                          lr=args.learning_rate2, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer2.zero_grad()
+
+    # optimizer for discriminator network
+    optimizer_D2 = optim.Adam(model_D2.parameters(), lr=args.learning_rate_D2, betas=(0.9, 0.99))
+    optimizer_D2.zero_grad()
+
     # loss/ bilinear upsampling
     bce_loss = BCEWithLogitsLoss2d()
     interp = nn.Upsample(size=(input_size[1], input_size[0]), mode='bilinear')
@@ -350,12 +376,20 @@ def main():
         optimizer_D.zero_grad()
         adjust_learning_rate_D(optimizer_D, i_iter)
 
+        optimizer2.zero_grad()
+        adjust_learning_rate(optimizer2, i_iter)
+        optimizer_D2.zero_grad()
+        adjust_learning_rate_D(optimizer_D2, i_iter)
+
         for sub_i in range(args.iter_size):
 
             # train G
 
             # don't accumulate grads in D
             for param in model_D.parameters():
+                param.requires_grad = False
+
+            for param in model_D2.parameters():
                 param.requires_grad = False
 
             # do semi first
@@ -373,14 +407,21 @@ def main():
 
                 pred = interp(model(images))
                 pred_remain = pred.detach()
-                img_remain=images.detach()
 
-                D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
+                pred2 = interp(model2(images))
+                pred_remain2 = pred2.detach()
+
+                D_out = interp(model_D(F.softmax(pred,dim=1)))
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
 
-                ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
+                D_out2 = interp(model_D2(F.softmax(pred2, dim=1)))
+                D_out_sigmoid2 = F.sigmoid(D_out2).data.cpu().numpy().squeeze(axis=1)
 
-                loss_semi_adv = args.lambda_semi_adv * bce_loss(D_out, make_D_label(gt_label, ignore_mask_remain))
+                ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
+                ignore_mask_remain2 = np.zeros(D_out_sigmoid2.shape).astype(np.bool)
+
+                loss_semi_adv = args.lambda_semi_adv * bce_loss(D_out, make_D_label(gt_label, ignore_mask_remain))+\
+                                args.lambda_semi_adv * bce_loss(D_out2, make_D_label(gt_label, ignore_mask_remain2))
                 loss_semi_adv = loss_semi_adv/args.iter_size
 
                 #loss_semi_adv.backward()
@@ -391,20 +432,24 @@ def main():
                     loss_semi_value = 0
                 else:
                     # produce ignore mask
-                    semi_ignore_mask = (D_out_sigmoid < args.mask_T)
+                    semi_ignore_mask = (D_out_sigmoid2 < args.mask_T)
+                    semi_ignore_mask2 = (D_out_sigmoid < args.mask_T)
 
                     semi_gt = pred.data.cpu().numpy().argmax(axis=1)
                     semi_gt[semi_ignore_mask] = 255
 
+                    semi_gt2 = pred2.data.cpu().numpy().argmax(axis=1)
+                    semi_gt2[semi_ignore_mask2] = 255
+
                     semi_ratio = 1.0 - float(semi_ignore_mask.sum())/semi_ignore_mask.size
-                    logger.info('semi ratio: {:.4f}'.format(semi_ratio))
+                    print('semi ratio: {:.4f}'.format(semi_ratio))
 
                     if semi_ratio == 0.0:
                         loss_semi_value += 0
                     else:
                         semi_gt = torch.FloatTensor(semi_gt)
 
-                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)
+                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)+ args.lambda_semi * loss_calc(pred2, semi_gt2)
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
@@ -426,14 +471,14 @@ def main():
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
+            pred2 = interp(model2(images))
 
-            loss_seg = loss_calc(pred, labels)
+            loss_seg = loss_calc(pred, labels)+loss_calc(pred2, labels)
 
-            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
+            D_out2 = interp(model_D2(F.softmax(pred2, dim=1)))
 
-
-
-            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
+            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))+bce_loss(D_out2, make_D_label(gt_label, ignore_mask))
 
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
 
@@ -450,17 +495,23 @@ def main():
             for param in model_D.parameters():
                 param.requires_grad = True
 
+            for param in model_D2.parameters():
+                param.requires_grad = True
+
             # train with pred
             pred = pred.detach()
+            pred2 = pred2.detach()
 
             if args.D_remain:
                 pred = torch.cat((pred, pred_remain), 0)
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
-                img_concat=torch.cat((images, img_remain), 0)
+            if args.D_remain:
+                pred2 = torch.cat((pred2, pred_remain2), 0)
+                ignore_mask2 = np.concatenate((ignore_mask2,ignore_mask_remain2), axis = 0)
 
-            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), img_concat], 1)))
-
-            loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
+            D_out2 = interp(model_D2(F.softmax(pred2, dim=1)))
+            loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))+bce_loss(D_out2, make_D_label(pred_label, ignore_mask2))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -474,13 +525,13 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            img_gt, labels_gt, _, _ = batch
-            img_gt = Variable(img_gt).cuda()
+            _, labels_gt, _, _ = batch
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = interp(model_D(torch.cat([D_gt_v, img_gt], 1)))
-            loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
+            D_out = interp(model_D(D_gt_v))
+            D_out2 = interp(model_D2(D_gt_v))
+            loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))+bce_loss(D_out2, make_D_label(gt_label, ignore_mask_gt))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -490,19 +541,34 @@ def main():
         optimizer.step()
         optimizer_D.step()
 
-        #logger.info('exp = {}'.format(args.snapshot_dir))
-        logger.info('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))
+        optimizer2.step()
+        optimizer_D2.step()
+
+        print('exp = {}'.format(args.snapshot_dir))
+        print('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
             torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'.pth'))
             torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model2.state_dict(), osp.join(args.snapshot_dir,
+                                                    'VOC_' + os.path.abspath(__file__).split('/')[-1].split('.')[
+                                                        0] + '_2_' + str(args.num_steps) + '.pth'))
+            torch.save(model_D2.state_dict(), osp.join(args.snapshot_dir,
+                                                      'VOC_' + os.path.abspath(__file__).split('/')[-1].split('.')[
+                                                          0] + '_2_' + str(args.num_steps) + '_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
             torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'.pth'))
             torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'_D.pth'))
+            torch.save(model2.state_dict(), osp.join(args.snapshot_dir,
+                                                    'VOC_' + os.path.abspath(__file__).split('/')[-1].split('.')[
+                                                        0] + '_2_' + str(i_iter) + '.pth'))
+            torch.save(model_D2.state_dict(), osp.join(args.snapshot_dir,
+                                                      'VOC_' + os.path.abspath(__file__).split('/')[-1].split('.')[
+                                                          0] + '_2_' + str(i_iter) + '_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')

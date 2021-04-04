@@ -17,10 +17,11 @@ import pickle
 from packaging import version
 
 from model.deeplab import Res_Deeplab
-from model.discriminator_concat import FCDiscriminator
+from model.discriminator import FCDiscriminator
 from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
-import logging
+
+
 
 import matplotlib.pyplot as plt
 import random
@@ -47,7 +48,6 @@ RESTORE_FROM = 'http://vllab1.ucmerced.edu/~whung/adv-semi-seg/resnet101COCO-41f
 SAVE_NUM_IMAGES = 2
 SAVE_PRED_EVERY = 5000
 SNAPSHOT_DIR = './snapshots/'
-
 WEIGHT_DECAY = 0.0005
 
 LEARNING_RATE_D = 1e-4
@@ -62,22 +62,6 @@ MASK_T=0.2
 LAMBDA_SEMI_ADV=0.001
 SEMI_START_ADV=0
 D_REMAIN=True
-
-
-def get_log(file_name):
-    logger = logging.getLogger('train')
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    fh = logging.FileHandler(file_name, mode='a')
-    fh.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(message)s')
-    ch.setFormatter(formatter)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-    return logger
-
 
 
 def get_arguments():
@@ -165,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -214,12 +198,6 @@ def make_D_label(label, ignore_mask):
 
 
 def main():
-    log_dir = './log/'
-    log_file=osp.join(log_dir,os.path.abspath(__file__).split('/')[-1].split('.')[0]+'.txt')
-    if os.path.isfile(log_file):
-        os.remove(log_file)
-    logger = get_log(log_file)
-    logger.info( 'semi_start = {0:8d}'.format(args.semi_start))
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
@@ -373,9 +351,8 @@ def main():
 
                 pred = interp(model(images))
                 pred_remain = pred.detach()
-                img_remain=images.detach()
 
-                D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
+                D_out = interp(model_D(F.softmax(pred,dim=1)))
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
@@ -397,7 +374,7 @@ def main():
                     semi_gt[semi_ignore_mask] = 255
 
                     semi_ratio = 1.0 - float(semi_ignore_mask.sum())/semi_ignore_mask.size
-                    logger.info('semi ratio: {:.4f}'.format(semi_ratio))
+                    print('semi ratio: {:.4f}'.format(semi_ratio))
 
                     if semi_ratio == 0.0:
                         loss_semi_value += 0
@@ -429,9 +406,7 @@ def main():
 
             loss_seg = loss_calc(pred, labels)
 
-            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
-
-
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
 
             loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
@@ -456,10 +431,8 @@ def main():
             if args.D_remain:
                 pred = torch.cat((pred, pred_remain), 0)
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
-                img_concat=torch.cat((images, img_remain), 0)
 
-            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), img_concat], 1)))
-
+            D_out = interp(model_D(F.softmax(pred,dim=1)))
             loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
@@ -474,12 +447,11 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            img_gt, labels_gt, _, _ = batch
-            img_gt = Variable(img_gt).cuda()
+            _, labels_gt, _, _ = batch
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = interp(model_D(torch.cat([D_gt_v, img_gt], 1)))
+            D_out = interp(model_D(D_gt_v))
             loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
@@ -490,8 +462,8 @@ def main():
         optimizer.step()
         optimizer_D.step()
 
-        #logger.info('exp = {}'.format(args.snapshot_dir))
-        logger.info('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))
+        print('exp = {}'.format(args.snapshot_dir))
+        print('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))
 
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
