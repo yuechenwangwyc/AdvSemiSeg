@@ -8,7 +8,7 @@ import pickle
 from torch.autograd import Variable
 import torch.optim as optim
 import torch.nn.functional as F
-import scipy.misc
+#import scipy.misc
 import torch.backends.cudnn as cudnn
 import sys
 import os
@@ -83,7 +83,7 @@ def get_arguments():
                         help="Path to the directory containing the PASCAL VOC dataset.")
     parser.add_argument("--data-list", type=str, default=DATA_LIST_PATH,
                         help="Path to the file listing the images in the dataset.")
-    parser.add_argument("--partial-data", type=float, default=0.125,
+    parser.add_argument("--partial-data", type=float, default=PARTIAL_DATA,
                         help="The index of the label to ignore during the training.")
     parser.add_argument("--partial-id", type=str, default=None,
                         help="restore partial id list")
@@ -97,15 +97,15 @@ def get_arguments():
                         help="Base learning rate for training with polynomial decay.")
     parser.add_argument("--learning-rate-D", type=float, default=LEARNING_RATE_D,
                         help="Base learning rate for discriminator.")
-    parser.add_argument("--lambda-adv-pred", type=float, default=0.01,
+    parser.add_argument("--lambda-adv-pred", type=float, default=LAMBDA_ADV_PRED,
                         help="lambda_adv for adversarial training.")
-    parser.add_argument("--lambda-semi", type=float, default=0.1,
+    parser.add_argument("--lambda-semi", type=float, default=LAMBDA_SEMI,
                         help="lambda_semi for adversarial training.")
     parser.add_argument("--lambda-semi-adv", type=float, default=LAMBDA_SEMI_ADV,
                         help="lambda_semi for adversarial training.")
-    parser.add_argument("--mask-T", type=float, default=0.2,
+    parser.add_argument("--mask-T", type=float, default=MASK_T,
                         help="mask T for semi adversarial training.")
-    parser.add_argument("--semi-start", type=int, default=5000,
+    parser.add_argument("--semi-start", type=int, default=SEMI_START,
                         help="start semi learning after # iterations")
     parser.add_argument("--semi-start-adv", type=int, default=SEMI_START_ADV,
                         help="start semi learning after # iterations")
@@ -117,7 +117,7 @@ def get_arguments():
                         help="Whether to not restore last (FC) layers.")
     parser.add_argument("--num-classes", type=int, default=NUM_CLASSES,
                         help="Number of classes to predict (including background).")
-    parser.add_argument("--num-steps", type=int, default=20000,
+    parser.add_argument("--num-steps", type=int, default=NUM_STEPS,
                         help="Number of training steps.")
     parser.add_argument("--power", type=float, default=POWER,
                         help="Decay parameter to compute the learning rate.")
@@ -135,7 +135,7 @@ def get_arguments():
                         help="How many images to save.")
     parser.add_argument("--save-pred-every", type=int, default=SAVE_PRED_EVERY,
                         help="Save summaries and checkpoint every often.")
-    parser.add_argument("--snapshot-dir", type=str, default='snapshots',
+    parser.add_argument("--snapshot-dir", type=str, default=SNAPSHOT_DIR,
                         help="Where to save snapshots of the model.")
     parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY,
                         help="Regularisation parameter for L2-loss.")
@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -188,18 +188,13 @@ def one_hot(label):
     #handle ignore labels
     return torch.FloatTensor(one_hot)
 
-def make_D_label(label, d_out):
-
-    D_label = np.ones(d_out.size())*label
-
+def make_D_label(label, D_out):
+    D_label = np.ones(D_out.size()[0])*label
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
-
     return D_label
 
 
 def main():
-
-
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
@@ -216,20 +211,17 @@ def main():
     else:
         saved_state_dict = torch.load(args.restore_from)
 
-    # only copy the params that exist in currendt model (caffe-like)
+    # only copy the params that exist in current model (caffe-like)
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
         print (name)
         if name in saved_state_dict and param.size() == saved_state_dict[name].size():
             new_params[name].copy_(saved_state_dict[name])
             print('copy {}'.format(name))
-
     model.load_state_dict(new_params)
 
 
     model.train()
-
-
     model=nn.DataParallel(model)
     model.cuda()
 
@@ -240,7 +232,6 @@ def main():
     model_D = Discriminator(num_classes=args.num_classes)
     if args.restore_from_D is not None:
          model_D.load_state_dict(torch.load(args.restore_from_D))
-    #
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
@@ -265,14 +256,13 @@ def main():
         trainloader_gt = data.DataLoader(train_gt_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=5, pin_memory=True)
     else:
-
         #sample partial data
         partial_size = int(args.partial_data * train_dataset_size)
 
 
 
     trainloader_iter = enumerate(trainloader)
-
+    trainloader_gt_iter = enumerate(trainloader_gt)
 
 
     # implement model.optim_parameters(args) to handle different models' lr setting
@@ -287,7 +277,7 @@ def main():
     optimizer_D.zero_grad()
 
     # loss/ bilinear upsampling
-    bce_loss = BCEWithLogitsLoss2d()
+    bce_loss = torch.nn.BCELoss()
     interp = nn.Upsample(size=(input_size[1], input_size[0]), mode='bilinear')
 
     if version.parse(torch.__version__) >= version.parse('0.4.0'):
@@ -299,7 +289,6 @@ def main():
     # labels for adversarial training
     pred_label = 0
     gt_label = 1
-
 
 
     for i_iter in range(args.num_steps):
@@ -316,7 +305,6 @@ def main():
         adjust_learning_rate_D(optimizer_D, i_iter)
 
         for sub_i in range(args.iter_size):
-
 
             # train G
 
@@ -337,26 +325,18 @@ def main():
             images, labels, _, _ = batch
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
-
             pred = interp(model(images))
-
 
             loss_seg = loss_calc(pred, labels)
 
-            D_out = model_D(torch.cat([F.softmax(pred,dim=1),images],1))
-
-
-
+            D_out = model_D(torch.cat([F.softmax(pred,dim=1),F.sigmoid(images)],1))
 
             loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
 
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
 
-
-
             # proper normalization
             loss = loss/args.iter_size
-
             loss.backward()
             loss_seg_value += loss_seg.data.cpu().numpy()[0]/args.iter_size
             loss_adv_pred_value += loss_adv_pred.data.cpu().numpy()[0]/args.iter_size
@@ -373,7 +353,8 @@ def main():
 
 
 
-            D_out =model_D(torch.cat([F.softmax(pred,dim=1),images],1))
+
+            D_out =model_D(torch.cat([F.softmax(pred,dim=1),F.sigmoid(images)],1))
             loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
@@ -388,12 +369,12 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            img2, labels_gt, _, _ = batch
-            img2=Variable(img2).cuda()
+            img_gt, labels_gt, _, _ = batch
+            img_gt=Variable(img_gt).cuda()
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = model_D(torch.cat([D_gt_v,img2],1))
+            D_out = model_D(torch.cat([D_gt_v,F.sigmoid(img_gt)],1))
             loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()

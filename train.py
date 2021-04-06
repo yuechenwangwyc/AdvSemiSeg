@@ -193,7 +193,6 @@ def make_D_label(label, ignore_mask):
     D_label = np.ones(ignore_mask.shape)*label
     D_label[ignore_mask] = 255
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
-
     return D_label
 
 

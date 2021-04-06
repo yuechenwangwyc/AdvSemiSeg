@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.deeplab import Res_Deeplab
-from model.discriminator_concat import FCDiscriminator
+from model.discriminator_pred_concat_img import FCDiscriminator
 from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 import logging
@@ -165,7 +165,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -360,6 +360,7 @@ def main():
 
             # do semi first
             if (args.lambda_semi > 0 or args.lambda_semi_adv > 0 ) and i_iter >= args.semi_start_adv :
+
                 try:
                     _, batch = trainloader_remain_iter.next()
                 except:
@@ -375,10 +376,11 @@ def main():
                 pred_remain = pred.detach()
                 img_remain=images.detach()
 
-                D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
+                D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), F.sigmoid(images)], 1)))
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
+
 
                 loss_semi_adv = args.lambda_semi_adv * bce_loss(D_out, make_D_label(gt_label, ignore_mask_remain))
                 loss_semi_adv = loss_semi_adv/args.iter_size
@@ -429,7 +431,7 @@ def main():
 
             loss_seg = loss_calc(pred, labels)
 
-            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), images], 1)))
+            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), F.sigmoid(images)], 1)))
 
 
 
@@ -456,9 +458,10 @@ def main():
             if args.D_remain:
                 pred = torch.cat((pred, pred_remain), 0)
                 ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
-                img_concat=torch.cat((images, img_remain), 0)
+                images=torch.cat((images, img_remain), 0)
 
-            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), img_concat], 1)))
+
+            D_out = interp(model_D(torch.cat([F.softmax(pred, dim=1), F.sigmoid(images)], 1)))
 
             loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
@@ -479,7 +482,7 @@ def main():
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = interp(model_D(torch.cat([D_gt_v, img_gt], 1)))
+            D_out = interp(model_D(torch.cat([D_gt_v, F.sigmoid(img_gt)], 1)))
             loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()

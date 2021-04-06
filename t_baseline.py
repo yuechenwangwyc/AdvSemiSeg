@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -193,13 +193,10 @@ def make_D_label(label, ignore_mask):
     D_label = np.ones(ignore_mask.shape)*label
     D_label[ignore_mask] = 255
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
-
     return D_label
 
 
 def main():
-
-
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
@@ -216,20 +213,17 @@ def main():
     else:
         saved_state_dict = torch.load(args.restore_from)
 
-    # only copy the params that exist in currendt model (caffe-like)
+    # only copy the params that exist in current model (caffe-like)
     new_params = model.state_dict().copy()
     for name, param in new_params.items():
         print (name)
         if name in saved_state_dict and param.size() == saved_state_dict[name].size():
             new_params[name].copy_(saved_state_dict[name])
             print('copy {}'.format(name))
-
     model.load_state_dict(new_params)
 
 
     model.train()
-
-
     model=nn.DataParallel(model)
     model.cuda()
 
@@ -265,7 +259,6 @@ def main():
         trainloader_gt = data.DataLoader(train_gt_dataset,
                         batch_size=args.batch_size, shuffle=True, num_workers=5, pin_memory=True)
     else:
-
         #sample partial data
         partial_size = int(args.partial_data * train_dataset_size)
         '''
@@ -339,7 +332,6 @@ def main():
 
         for sub_i in range(args.iter_size):
 
-
             # train G
 
             # don't accumulate grads in D
@@ -363,7 +355,7 @@ def main():
                 pred = interp(model(images))
                 pred_remain = pred.detach()
 
-                D_out = interp(model_D(F.softmax(pred)))
+                D_out = interp(model_D(F.softmax(pred,dim=1)))
                 D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
 
                 ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
