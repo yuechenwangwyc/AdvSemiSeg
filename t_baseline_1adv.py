@@ -189,7 +189,7 @@ def one_hot(label):
     return torch.FloatTensor(one_hot)
 
 def make_D_label(label, D_out):
-    D_label = np.ones(D_out.size()[0])*label
+    D_label = np.ones(D_out.size())*label
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
     return D_label
 
@@ -333,7 +333,7 @@ def main():
 
             loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
 
-            loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
+            loss = loss_seg + args.lambda_adv_pred * loss_adv_pred*5
 
             # proper normalization
             loss = loss/args.iter_size
