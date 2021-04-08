@@ -198,7 +198,7 @@ def main():
 
     model = Res_Deeplab(num_classes=args.num_classes)
     #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))
-    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_t_baseline_1adv_20000.pth')#baseline70.6  #1adv69.4 1adv 71.8
+    state_dict=torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_t_two_net_20000.pth')
 
 
     # original saved file with DataParallel

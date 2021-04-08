@@ -16,8 +16,8 @@ import os.path as osp
 import pickle
 from packaging import version
 
-from model.deeplab import Res_Deeplab
-from model.discriminator import FCDiscriminator
+from model.deeplab import Res_Deeplab,Res_Deeplab2
+from model.discriminator import FCDiscriminator,FCDiscriminator2
 from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
@@ -150,11 +150,7 @@ def get_arguments():
                         help="choose gpu device.")
     return parser.parse_args()
 """
---snapshot-dir snapshots \
-                --partial-data 0.125 \
-                --num-steps 20000 \
-                --lambda-adv-pred 0.01 \
-                --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
+--snapshot-dir snapshots --partial-data 0.125  --num-steps 20000   --lambda-adv-pred 0.01   --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
 os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 args = get_arguments()
@@ -227,7 +223,7 @@ def main():
 
     # create network
     model = Res_Deeplab(num_classes=args.num_classes)
-    model2 = Res_Deeplab(num_classes=args.num_classes)
+    model2 = Res_Deeplab2(num_classes=args.num_classes)
 
     # load pretrained parameters
     if args.restore_from[:4] == 'http' :
@@ -272,7 +268,7 @@ def main():
     model_D.train()
     model_D.cuda()
 
-    model_D2 = FCDiscriminator(num_classes=args.num_classes)
+    model_D2 = FCDiscriminator2(num_classes=args.num_classes)
     if args.restore_from_D is not None:
         model_D2.load_state_dict(torch.load(args.restore_from_D))
     model_D2 = nn.DataParallel(model_D2)
@@ -377,9 +373,9 @@ def main():
         adjust_learning_rate_D(optimizer_D, i_iter)
 
         optimizer2.zero_grad()
-        adjust_learning_rate(optimizer2, i_iter)
+        adjust_learning_rate2(optimizer2, i_iter)
         optimizer_D2.zero_grad()
-        adjust_learning_rate_D(optimizer_D2, i_iter)
+        adjust_learning_rate_D2(optimizer_D2, i_iter)
 
         for sub_i in range(args.iter_size):
 
@@ -432,8 +428,8 @@ def main():
                     loss_semi_value = 0
                 else:
                     # produce ignore mask
-                    semi_ignore_mask = (D_out_sigmoid2 < args.mask_T)
-                    semi_ignore_mask2 = (D_out_sigmoid < args.mask_T)
+                    semi_ignore_mask = (D_out_sigmoid < args.mask_T)
+                    semi_ignore_mask2 = (D_out_sigmoid2 < args.mask_T)
 
                     semi_gt = pred.data.cpu().numpy().argmax(axis=1)
                     semi_gt[semi_ignore_mask] = 255
@@ -448,8 +444,9 @@ def main():
                         loss_semi_value += 0
                     else:
                         semi_gt = torch.FloatTensor(semi_gt)
+                        semi_gt2 = torch.FloatTensor(semi_gt2)
 
-                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)+ args.lambda_semi * loss_calc(pred2, semi_gt2)
+                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt2)+ args.lambda_semi * loss_calc(pred2, semi_gt)
                         loss_semi = loss_semi/args.iter_size
                         loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
                         loss_semi += loss_semi_adv
@@ -470,6 +467,7 @@ def main():
             images, labels, _, _ = batch
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
+            ignore_mask2 = (labels.numpy() == 255)
             pred = interp(model(images))
             pred2 = interp(model2(images))
 
