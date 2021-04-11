@@ -1,19 +1,18 @@
 import argparse
-import cv2
+#import cv2
 import torch
 import torch.nn as nn
 from torch.utils import data, model_zoo
 import numpy as np
-import pickle
+#import pickle
 from torch.autograd import Variable
 import torch.optim as optim
-import torch.nn.functional as F
-import scipy.misc
+# import torch.nn.functional as F
+# import scipy.misc
 import torch.backends.cudnn as cudnn
 import sys
 import os
 import os.path as osp
-import pickle
 from packaging import version
 
 from model.deeplab import Res_Deeplab
