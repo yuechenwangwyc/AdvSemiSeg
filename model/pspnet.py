@@ -39,6 +39,20 @@ class PSPUpsample(nn.Module):
         p = F.upsample(input=x, size=(h, w), mode='bilinear')
         return self.conv(p)
 
+class PSPUpsample2(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(PSPUpsample2,self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.PReLU()
+        )
+
+    def forward(self, x):
+        h, w = 2 * x.size(2), 2 * x.size(3)
+        p = F.upsample(input=x, size=(321, 321), mode='bilinear')
+        return self.conv(p)
+
 
 class PSPNet(nn.Module):
     def __init__(self, n_classes=21, sizes=(1, 2, 3, 6), psp_size=2048, deep_features_size=1024, backend='resnet34',
@@ -50,7 +64,7 @@ class PSPNet(nn.Module):
 
         self.up_1 = PSPUpsample(1024, 256)
         self.up_2 = PSPUpsample(256, 64)
-        self.up_3 = PSPUpsample(64, 64)
+        self.up_3 = PSPUpsample2(64, 64)
 
         self.drop_2 = nn.Dropout2d(p=0.15)
         self.final = nn.Sequential(
@@ -77,6 +91,8 @@ class PSPNet(nn.Module):
 
         p = self.up_3(p)
         p = self.drop_2(p)
+
+        p.size()
 
         auxiliary = F.adaptive_max_pool2d(input=class_f, output_size=(1, 1)).view(-1, class_f.size(1))
 

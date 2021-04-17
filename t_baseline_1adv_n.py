@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -339,7 +339,7 @@ def main():
                 trainloader_iter = enumerate(trainloader)
                 _, batch = trainloader_iter.next()
 
-            images, labels, _, _ = batch
+            images, labels, _, _= batch
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))

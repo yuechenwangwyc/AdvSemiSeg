@@ -84,7 +84,8 @@ class VOCDataSet(data.Dataset):
         gt_cls, _ = np.histogram(gt_np, bins=21, range=(-0.5, 21 - 0.5), )
         gt_cls = np.asarray(np.asarray(gt_cls, dtype=np.bool), dtype=np.uint8)
 
-        return image.copy(), label.copy(), np.array(size), name
+
+        return image.copy(), label.copy(), np.array(size), name,gt_cls
 
 
 class VOCGTDataSet(data.Dataset):
@@ -164,7 +165,7 @@ class VOCGTDataSet(data.Dataset):
         gt_cls, _ = np.histogram(gt_np, bins=21, range=(-0.5, 21 - 0.5), )
         gt_cls = np.asarray(np.asarray(gt_cls, dtype=np.bool), dtype=np.uint8)
 
-        return image.copy(), label.copy(), np.array(size), name
+        return image.copy(), label.copy(), np.array(size), name,gt_cls
 
 class VOCDataTestSet(data.Dataset):
     def __init__(self, root, list_path, crop_size=(505, 505), mean=(128, 128, 128)):

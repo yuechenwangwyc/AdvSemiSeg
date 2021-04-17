@@ -18,8 +18,8 @@ from packaging import version
 
 from model.pspnet import PSPNet
 from model.discriminator import FCDiscriminator
-from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
-from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
+from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d,NLL2d
+from dataset.voc_dataset_psp import VOCDataSet, VOCGTDataSet
 
 
 
@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -213,6 +213,7 @@ def main():
 
     # load pretrained parameters
     if args.restore_from[:4] == 'http' :
+        #saved_state_dict = torch.load(args.restore_from)
         saved_state_dict = model_zoo.load_url(args.restore_from)
     else:
         saved_state_dict = torch.load(args.restore_from)
@@ -296,7 +297,7 @@ def main():
     pred_label = 0
     gt_label = 1
 
-    seg_criterion=nn.NLLLoss(weight=None)
+    seg_criterion=NLL2d().cuda()
     cls_criterion=nn.BCEWithLogitsLoss(weight=None)
 
 
@@ -327,9 +328,14 @@ def main():
                 _, batch = trainloader_iter.next()
 
             images, labels, _, _, y_cls= batch
+            labels = Variable(labels.long()).cuda()
+
+            y_cls = Variable(y_cls.float()).cuda()
+
             images = Variable(images).cuda()
-            ignore_mask = (labels.numpy() == 255)
+            #ignore_mask = (labels.numpy() == 255)
             out,out_cls=model(images)
+
             seg_loss,cls_loss=seg_criterion(out,labels),cls_criterion(out_cls,y_cls)
 
 
