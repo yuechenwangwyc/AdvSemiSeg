@@ -8,3 +8,9 @@ import numpy as np
 # print np.amax(m,axis=1)
 
 
+import torch
+
+x=torch.randn(3,4)
+indices=torch.LongTensor([3])
+print x
+print x.repeat(1,2)

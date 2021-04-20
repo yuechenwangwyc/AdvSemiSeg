@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator_mul
+from model.my_discriminator import Discriminator_mul2
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -225,7 +225,7 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator_mul(num_classes=args.num_classes)
+    model_D = Discriminator_mul2(num_classes=args.num_classes)
     if args.restore_from_D is not None:
          model_D.load_state_dict(torch.load(args.restore_from_D))
     model_D = nn.DataParallel(model_D)
@@ -320,32 +320,33 @@ def main():
             pred = interp(model(images))
             loss_seg = loss_calc(pred, labels)
 
-            D_out = model_D(torch.cat([F.softmax(pred,dim=1),F.sigmoid(images)],1))
-            D_out = F.softmax(D_out, dim=1)
+
+            pred_re=F.softmax(pred,dim=1).repeat(1,3,1,1)
+            indices_1=torch.index_select(images,1,Variable(torch.LongTensor([0])).cuda())
+            indices_2 = torch.index_select(images,1,Variable(torch.LongTensor([1])).cuda())
+            indices_3 = torch.index_select(images,1,Variable(torch.LongTensor([2])).cuda())
+            img_re=torch.cat([indices_1.repeat(1,21,1,1),indices_2.repeat(1,21,1,1),indices_3.repeat(1,21,1,1),],1)
+
+            mul_img=pred_re*img_re
+
+            D_out = model_D(mul_img)
+            D_out = F.sigmoid(D_out)
 
             lab = np.zeros([D_out.size()[0], 40])
 
             for i_l in range(labels.shape[0]):
                 label_set_gt = np.unique(labels[i_l]).tolist()
-                set_len = len(label_set_gt)
                 for ls in label_set_gt:
-                    if ls ==0:
-                        set_len=set_len-1
-                    elif ls==255:
-                        set_len =set_len - 1
-                    else:
+                    if ls != 0 and ls != 255:
                         lab[i_l][int(ls - 1)] = 1.0
-                if set_len==0:
-                    print label_set_gt,name[i_l]
-                else:
-                    lab[i_l]=lab[i_l]/set_len
+
             #print lab
 
             lab = Variable(torch.FloatTensor(lab)).cuda()
             loss_D = F.mse_loss(D_out, lab)
             #loss_D = -torch.mean(loss_D)
 
-            loss = loss_seg + args.lambda_adv_pred * loss_D*9
+            loss = loss_seg + args.lambda_adv_pred * loss_D*2
 
             # proper normalization
             loss = loss/args.iter_size
@@ -363,29 +364,31 @@ def main():
             # train with pred
             pred = pred.detach()
 
-            D_out = model_D(torch.cat([F.softmax(pred, dim=1), F.sigmoid(images)], 1))
-            D_out = F.softmax(D_out, dim=1)
+            pred_re2 = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
+            indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
+            indices_2 = torch.index_select(images, 1, Variable(torch.LongTensor([1])).cuda())
+            indices_3 = torch.index_select(images, 1, Variable(torch.LongTensor([2])).cuda())
+            img_re2 = torch.cat(
+                [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
+
+            mul_img2 = pred_re2 * img_re2
+
+
+            D_out = model_D(mul_img2)
+            D_out = F.sigmoid(D_out)
             lab = np.zeros([D_out.size()[0], 40])
             for i_l in range(labels.shape[0]):
                 label_set_gt = np.unique(labels[i_l]).tolist()
-                set_len = len(label_set_gt)
                 for ls in label_set_gt:
-                    if ls == 0:
-                        set_len = set_len - 1
-                    elif ls == 255:
-                        set_len = set_len - 1
-                    else:
+                    if ls != 0 and ls != 255:
                         lab[i_l][int(ls - 1)+20] = 1.0
-                if set_len == 0:
-                    print label_set_gt,name[i_l]
-                else:
-                    lab[i_l] = lab[i_l] / set_len
+
 
             lab = Variable(torch.FloatTensor(lab)).cuda()
 
             # loss_D = D_out * lab
             # loss_D = -torch.mean(loss_D)
-            loss_D=F.mse_loss(D_out,lab)
+            loss_D=F.mse_loss(D_out,lab)*10
 
 
 
@@ -408,32 +411,34 @@ def main():
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = model_D(torch.cat([D_gt_v,F.sigmoid(img_gt)],1))
-            D_out = F.softmax(D_out, dim=1)
+            pred_re3 = D_gt_v.repeat(1, 3, 1, 1)
+            indices_1 = torch.index_select(img_gt, 1, Variable(torch.LongTensor([0])).cuda())
+            indices_2 = torch.index_select(img_gt, 1, Variable(torch.LongTensor([1])).cuda())
+            indices_3 = torch.index_select(img_gt, 1, Variable(torch.LongTensor([2])).cuda())
+            img_re3 = torch.cat(
+                [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
+
+            mul_img3 = pred_re3 * img_re3
+
+
+            D_out = model_D(mul_img3)
+            D_out = F.sigmoid(D_out)
 
             lab = np.zeros([D_out.size()[0], 40])
 
             for i_l in range(labels_gt.shape[0]):
                 label_set_gt = np.unique(labels_gt[i_l]).tolist()
-                set_len = len(label_set_gt)
                 for ls in label_set_gt:
-                    if ls == 0:
-                        set_len = set_len - 1
-                    elif ls == 255:
-                        set_len = set_len - 1
-                    else:
+                    if ls != 0 and ls != 255:
                         lab[i_l][int(ls - 1)] = 1.0
-                if set_len == 0:
-                    print label_set_gt,name[i_l]
-                else:
-                    lab[i_l] = lab[i_l] / set_len
+
 
 
 
             lab = Variable(torch.FloatTensor(lab)).cuda()
             # loss_D = D_out * lab
             # loss_D = -torch.mean(loss_D)
-            loss_D=F.mse_loss(D_out,lab)
+            loss_D=F.mse_loss(D_out,lab)*10
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]

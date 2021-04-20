@@ -21,7 +21,7 @@ from model.deeplab import Res_Deeplab
 from PIL import Image
 
 import matplotlib.pyplot as plt
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
 
 MODEL = 'DeepLab'
@@ -198,7 +198,7 @@ def main():
 
     model = Res_Deeplab(num_classes=args.num_classes)
     #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))
-    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_t_baseline_nadv_20000.pth')#baseline707 adv 709 nadv 705()*2
+    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_t_baseline_1adv_concat_20000.pth')#baseline707 adv 709 nadv 705()*2
 
 
     # original saved file with DataParallel

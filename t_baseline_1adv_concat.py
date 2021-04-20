@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator_mul
+from model.my_discriminator import Discriminator_concat
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
@@ -198,9 +198,13 @@ def main():
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
+
     cudnn.enabled = True
+
+
     # create network
     model = Res_Deeplab(num_classes=args.num_classes)
+
     # load pretrained parameters
     if args.restore_from[:4] == 'http' :
         saved_state_dict = model_zoo.load_url(args.restore_from)
@@ -225,12 +229,13 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator_mul(num_classes=args.num_classes)
+    model_D = Discriminator_concat(num_classes=args.num_classes)
     if args.restore_from_D is not None:
          model_D.load_state_dict(torch.load(args.restore_from_D))
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
+
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
@@ -307,51 +312,36 @@ def main():
             for param in model_D.parameters():
                 param.requires_grad = False
 
+            # do semi first
+
             # train with source
+
             try:
                 _, batch = trainloader_iter.next()
             except:
                 trainloader_iter = enumerate(trainloader)
                 _, batch = trainloader_iter.next()
 
-            images, labels, _, name = batch
+            images, labels, _, _ = batch
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
+
             loss_seg = loss_calc(pred, labels)
 
-            D_out = model_D(torch.cat([F.softmax(pred,dim=1),F.sigmoid(images)],1))
-            D_out = F.softmax(D_out, dim=1)
+            D_gt = Variable(one_hot(labels)).cuda()
 
-            lab = np.zeros([D_out.size()[0], 40])
+            D_out = model_D(torch.cat([F.softmax(pred,dim=1),D_gt,F.sigmoid(images)],1))
 
-            for i_l in range(labels.shape[0]):
-                label_set_gt = np.unique(labels[i_l]).tolist()
-                set_len = len(label_set_gt)
-                for ls in label_set_gt:
-                    if ls ==0:
-                        set_len=set_len-1
-                    elif ls==255:
-                        set_len =set_len - 1
-                    else:
-                        lab[i_l][int(ls - 1)] = 1.0
-                if set_len==0:
-                    print label_set_gt,name[i_l]
-                else:
-                    lab[i_l]=lab[i_l]/set_len
-            #print lab
+            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
 
-            lab = Variable(torch.FloatTensor(lab)).cuda()
-            loss_D = F.mse_loss(D_out, lab)
-            #loss_D = -torch.mean(loss_D)
-
-            loss = loss_seg + args.lambda_adv_pred * loss_D*9
+            loss = loss_seg + args.lambda_adv_pred * loss_adv_pred*5
 
             # proper normalization
             loss = loss/args.iter_size
             loss.backward()
             loss_seg_value += loss_seg.data.cpu().numpy()[0]/args.iter_size
-            loss_adv_pred_value += loss_D.data.cpu().numpy()[0]/args.iter_size
+            loss_adv_pred_value += loss_adv_pred.data.cpu().numpy()[0]/args.iter_size
 
 
             # train D
@@ -363,33 +353,11 @@ def main():
             # train with pred
             pred = pred.detach()
 
-            D_out = model_D(torch.cat([F.softmax(pred, dim=1), F.sigmoid(images)], 1))
-            D_out = F.softmax(D_out, dim=1)
-            lab = np.zeros([D_out.size()[0], 40])
-            for i_l in range(labels.shape[0]):
-                label_set_gt = np.unique(labels[i_l]).tolist()
-                set_len = len(label_set_gt)
-                for ls in label_set_gt:
-                    if ls == 0:
-                        set_len = set_len - 1
-                    elif ls == 255:
-                        set_len = set_len - 1
-                    else:
-                        lab[i_l][int(ls - 1)+20] = 1.0
-                if set_len == 0:
-                    print label_set_gt,name[i_l]
-                else:
-                    lab[i_l] = lab[i_l] / set_len
-
-            lab = Variable(torch.FloatTensor(lab)).cuda()
-
-            # loss_D = D_out * lab
-            # loss_D = -torch.mean(loss_D)
-            loss_D=F.mse_loss(D_out,lab)
 
 
 
-
+            D_out =model_D(torch.cat([F.softmax(pred,dim=1),D_gt,F.sigmoid(images)],1))
+            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -403,37 +371,15 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            img_gt, labels_gt, _, name = batch
+            img_gt, labels_gt, _, _ = batch
             img_gt=Variable(img_gt).cuda()
+            pred_gt = interp(model(img_gt))
+            pred_gt = pred_gt.detach()
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
 
-            D_out = model_D(torch.cat([D_gt_v,F.sigmoid(img_gt)],1))
-            D_out = F.softmax(D_out, dim=1)
-
-            lab = np.zeros([D_out.size()[0], 40])
-
-            for i_l in range(labels_gt.shape[0]):
-                label_set_gt = np.unique(labels_gt[i_l]).tolist()
-                set_len = len(label_set_gt)
-                for ls in label_set_gt:
-                    if ls == 0:
-                        set_len = set_len - 1
-                    elif ls == 255:
-                        set_len = set_len - 1
-                    else:
-                        lab[i_l][int(ls - 1)] = 1.0
-                if set_len == 0:
-                    print label_set_gt,name[i_l]
-                else:
-                    lab[i_l] = lab[i_l] / set_len
-
-
-
-            lab = Variable(torch.FloatTensor(lab)).cuda()
-            # loss_D = D_out * lab
-            # loss_D = -torch.mean(loss_D)
-            loss_D=F.mse_loss(D_out,lab)
+            D_out = model_D(torch.cat([D_gt_v,F.softmax(pred_gt,dim=1),F.sigmoid(img_gt)],1))
+            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
