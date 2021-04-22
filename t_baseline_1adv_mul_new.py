@@ -20,7 +20,7 @@ from model.my_deeplab import Res_Deeplab
 from model.my_discriminator import Discriminator2
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
-
+import math
 
 
 import matplotlib.pyplot as plt
@@ -147,9 +147,9 @@ def get_arguments():
                 --partial-data 0.125 \
                 --num-steps 20000 \
                 --lambda-adv-pred 0.01 \
-                --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
+                --lambda-semi 0.1 --semi-start 5000 --mask-T =fv0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -325,9 +325,9 @@ def main():
             loss_seg = loss_calc(pred, labels)
 
 
-            pred_re = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
-
-
+            pred_re0 = F.softmax(pred, dim=1)
+            pred_re = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
+            pred_re=pred_re.repeat(1, 3, 1, 1)
             indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
             indices_2 = torch.index_select(images, 1, Variable(torch.LongTensor([1])).cuda())
             indices_3 = torch.index_select(images, 1, Variable(torch.LongTensor([2])).cuda())
@@ -359,7 +359,10 @@ def main():
             # train with pred
             pred = pred.detach()
 
-            pred_re2 = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
+            pred_re0 = F.softmax(pred, dim=1)
+            pred_re2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
+            pred_re2 = pred_re2.repeat(1, 3, 1, 1)
+
 
 
             mul_img2 = pred_re2 * img_re

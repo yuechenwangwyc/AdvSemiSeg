@@ -16,9 +16,9 @@ import os.path as osp
 import pickle
 from packaging import version
 
-from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator2
-from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
+from model.deeplab import Res_Deeplab
+from model.discriminator import FCDiscriminator3
+from utils.loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 
 
@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -188,8 +188,10 @@ def one_hot(label):
     #handle ignore labels
     return torch.FloatTensor(one_hot)
 
-def make_D_label(label, D_out):
-    D_label = np.ones(D_out.size())*label
+def make_D_label(label, ignore_mask):
+    ignore_mask = np.expand_dims(ignore_mask, axis=1)
+    D_label = np.ones(ignore_mask.shape)*label
+    D_label[ignore_mask] = 255
     D_label = Variable(torch.FloatTensor(D_label)).cuda()
     return D_label
 
@@ -229,12 +231,13 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator2(num_classes=args.num_classes)
+    model_D = FCDiscriminator3(num_classes=args.num_classes)
     if args.restore_from_D is not None:
-         model_D.load_state_dict(torch.load(args.restore_from_D))
+        model_D.load_state_dict(torch.load(args.restore_from_D))
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
+
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
@@ -258,6 +261,27 @@ def main():
         #sample partial data
         partial_size = int(args.partial_data * train_dataset_size)
 
+        if args.partial_id is not None:
+            train_ids = pickle.load(open(args.partial_id))
+            print('loading train ids from {}'.format(args.partial_id))
+        else:
+            train_ids = list(range(train_dataset_size))
+            np.random.shuffle(train_ids)
+
+        pickle.dump(train_ids, open(osp.join(args.snapshot_dir, 'train_id.pkl'), 'wb'))
+
+        train_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
+        train_remain_sampler = data.sampler.SubsetRandomSampler(train_ids[partial_size:])
+        train_gt_sampler = data.sampler.SubsetRandomSampler(train_ids[:partial_size])
+
+        trainloader = data.DataLoader(train_dataset,
+                        batch_size=args.batch_size, sampler=train_sampler, num_workers=3, pin_memory=True)
+        trainloader_remain = data.DataLoader(train_dataset,
+                        batch_size=args.batch_size, sampler=train_remain_sampler, num_workers=3, pin_memory=True)
+        trainloader_gt = data.DataLoader(train_gt_dataset,
+                        batch_size=args.batch_size, sampler=train_gt_sampler, num_workers=3, pin_memory=True)
+
+        trainloader_remain_iter = enumerate(trainloader_remain)
 
 
     trainloader_iter = enumerate(trainloader)
@@ -276,7 +300,7 @@ def main():
     optimizer_D.zero_grad()
 
     # loss/ bilinear upsampling
-    bce_loss = torch.nn.BCELoss()
+    bce_loss = BCEWithLogitsLoss2d()
     interp = nn.Upsample(size=(input_size[1], input_size[0]), mode='bilinear')
 
     if version.parse(torch.__version__) >= version.parse('0.4.0'):
@@ -311,7 +335,76 @@ def main():
             for param in model_D.parameters():
                 param.requires_grad = False
 
+            # do semi first
+            if (args.lambda_semi > 0 or args.lambda_semi_adv > 0 ) and i_iter >= args.semi_start_adv :
+                try:
+                    _, batch = trainloader_remain_iter.next()
+                except:
+                    trainloader_remain_iter = enumerate(trainloader_remain)
+                    _, batch = trainloader_remain_iter.next()
+
+                # only access to img
+                images, _, _, _ = batch
+                images = Variable(images).cuda()
+
+
+                pred = interp(model(images))
+                pred_remain = pred.detach()
+
+                pred_re_semi = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
+                indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
+                indices_2 = torch.index_select(images, 1, Variable(torch.LongTensor([1])).cuda())
+                indices_3 = torch.index_select(images, 1, Variable(torch.LongTensor([2])).cuda())
+                img_re_semi = torch.cat(
+                    [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
+
+                mul_img_semi = pred_re_semi * img_re_semi
+
+                mul_img_semi_remain=mul_img_semi.detach()
+
+
+
+                D_out = interp(model_D(mul_img_semi))
+                D_out_sigmoid = F.sigmoid(D_out).data.cpu().numpy().squeeze(axis=1)
+
+                ignore_mask_remain = np.zeros(D_out_sigmoid.shape).astype(np.bool)
+
+                loss_semi_adv = args.lambda_semi_adv * bce_loss(D_out, make_D_label(gt_label, ignore_mask_remain))
+                loss_semi_adv = loss_semi_adv/args.iter_size
+
+                #loss_semi_adv.backward()
+                loss_semi_adv_value += loss_semi_adv.data.cpu().numpy()[0]/args.lambda_semi_adv
+
+                if args.lambda_semi <= 0 or i_iter < args.semi_start:
+                    loss_semi_adv.backward()
+                    loss_semi_value = 0
+                else:
+                    # produce ignore mask
+                    semi_ignore_mask = (D_out_sigmoid < args.mask_T)
+
+                    semi_gt = pred.data.cpu().numpy().argmax(axis=1)
+                    semi_gt[semi_ignore_mask] = 255
+
+                    semi_ratio = 1.0 - float(semi_ignore_mask.sum())/semi_ignore_mask.size
+                    print('semi ratio: {:.4f}'.format(semi_ratio))
+
+                    if semi_ratio == 0.0:
+                        loss_semi_value += 0
+                    else:
+                        semi_gt = torch.FloatTensor(semi_gt)
+
+                        loss_semi = args.lambda_semi * loss_calc(pred, semi_gt)
+                        loss_semi = loss_semi/args.iter_size
+                        loss_semi_value += loss_semi.data.cpu().numpy()[0]/args.lambda_semi
+                        loss_semi += loss_semi_adv
+                        loss_semi.backward()
+
+            else:
+                loss_semi = None
+                loss_semi_adv = None
+
             # train with source
+
             try:
                 _, batch = trainloader_iter.next()
             except:
@@ -322,12 +415,10 @@ def main():
             images = Variable(images).cuda()
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
+
             loss_seg = loss_calc(pred, labels)
 
-
             pred_re = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
-
-
             indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
             indices_2 = torch.index_select(images, 1, Variable(torch.LongTensor([1])).cuda())
             indices_3 = torch.index_select(images, 1, Variable(torch.LongTensor([2])).cuda())
@@ -336,10 +427,9 @@ def main():
 
             mul_img = pred_re * img_re
 
+            D_out = interp(model_D(mul_img))
 
-            D_out = model_D(mul_img)
-
-            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
+            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label, ignore_mask))
 
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
 
@@ -361,12 +451,14 @@ def main():
 
             pred_re2 = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
 
-
             mul_img2 = pred_re2 * img_re
 
-            D_out = model_D(mul_img2)
+            if args.D_remain:
+                mul_img2 = torch.cat((mul_img2, mul_img_semi_remain), 0)
+                ignore_mask = np.concatenate((ignore_mask,ignore_mask_remain), axis = 0)
 
-            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
+            D_out = interp(model_D(mul_img2))
+            loss_D = bce_loss(D_out, make_D_label(pred_label, ignore_mask))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -394,10 +486,8 @@ def main():
 
             mul_img3 = pred_re3 * img_re3
 
-
-            D_out = model_D(mul_img3)
-
-            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
+            D_out = interp(model_D(mul_img3))
+            loss_D = bce_loss(D_out, make_D_label(gt_label, ignore_mask_gt))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -413,13 +503,13 @@ def main():
         if i_iter >= args.num_steps-1:
             print( 'save model ...')
             torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'.pth'))
-            #torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'_D.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(args.num_steps)+'_D.pth'))
             break
 
         if i_iter % args.save_pred_every == 0 and i_iter!=0:
             print ('taking snapshot ...')
             torch.save(model.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'.pth'))
-            #torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'_D.pth'))
+            torch.save(model_D.state_dict(),osp.join(args.snapshot_dir, 'VOC_'+os.path.abspath(__file__).split('/')[-1].split('.')[0]+'_'+str(i_iter)+'_D.pth'))
 
     end = timeit.default_timer()
     print(end-start,'seconds')

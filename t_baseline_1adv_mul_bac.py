@@ -326,8 +326,6 @@ def main():
 
 
             pred_re = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
-
-
             indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
             indices_2 = torch.index_select(images, 1, Variable(torch.LongTensor([1])).cuda())
             indices_3 = torch.index_select(images, 1, Variable(torch.LongTensor([2])).cuda())
