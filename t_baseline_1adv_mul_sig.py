@@ -432,9 +432,9 @@ def main():
             for n in pred_min_m_list:
                 if n < 0.0000001:
                     c0 = c0 + 1
-                elif n < 0.1:
+                elif n < 0.005:
                     c3 = c3 + 1
-                elif n < 0.2:
+                elif n < 0.05:
                     c4 = c4 + 1
                 elif n < 0.3:
                     c5 = c5 + 1

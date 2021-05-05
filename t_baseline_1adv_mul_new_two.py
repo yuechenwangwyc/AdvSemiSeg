@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T =fv0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,3,0'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -342,7 +342,8 @@ def main():
 
             pred_re=pred_re0.repeat(1, 3, 1, 1)
 
-            pred_re_2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
+            #pred_re_2 = 1 / (math.e ** (((pred_re0 - 0.3) * 20) * (-1)) + 1)# 0.35) * 20)  673
+            pred_re_2 = torch.sin((pred_re0 - 0.3) * 1.7)
             pred_re_2 = pred_re_2.repeat(1, 3, 1, 1)
 
 
@@ -385,7 +386,8 @@ def main():
             pred_re0 = F.softmax(pred, dim=1)
             pred_re2 = pred_re0.repeat(1, 3, 1, 1)
 
-            pred_re2_2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
+            #pred_re2_2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
+            pred_re2_2 = torch.sin((pred_re0 - 0.3) * 1.7)
             pred_re2_2 = pred_re2_2.repeat(1, 3, 1, 1)
 
 
