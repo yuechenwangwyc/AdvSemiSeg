@@ -17,10 +17,10 @@ import pickle
 from packaging import version
 
 from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator2
+from model.my_discriminator import Discriminator2_con_pred
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
-import math
+
 
 
 import matplotlib.pyplot as plt
@@ -147,9 +147,9 @@ def get_arguments():
                 --partial-data 0.125 \
                 --num-steps 20000 \
                 --lambda-adv-pred 0.01 \
-                --lambda-semi 0.1 --semi-start 5000 --mask-T =fv0.2
+                --lambda-semi 0.1 --semi-start 5000 --mask-T 0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '1,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '2,1'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -229,19 +229,12 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator2(num_classes=args.num_classes)
+    model_D = Discriminator2_con_pred(num_classes=args.num_classes)
     if args.restore_from_D is not None:
          model_D.load_state_dict(torch.load(args.restore_from_D))
     model_D = nn.DataParallel(model_D)
     model_D.train()
     model_D.cuda()
-
-    model_D2 = Discriminator2(num_classes=args.num_classes)
-    if args.restore_from_D is not None:
-        model_D2.load_state_dict(torch.load(args.restore_from_D))
-    model_D2 = nn.DataParallel(model_D2)
-    model_D2.train()
-    model_D2.cuda()
 
     if not os.path.exists(args.snapshot_dir):
         os.makedirs(args.snapshot_dir)
@@ -280,9 +273,7 @@ def main():
 
     # optimizer for discriminator network
     optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
-    optimizer_D2 = optim.Adam(model_D2.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
     optimizer_D.zero_grad()
-    optimizer_D2.zero_grad()
 
     # loss/ bilinear upsampling
     bce_loss = torch.nn.BCELoss()
@@ -310,9 +301,7 @@ def main():
         optimizer.zero_grad()
         adjust_learning_rate(optimizer, i_iter)
         optimizer_D.zero_grad()
-        optimizer_D2.zero_grad()
         adjust_learning_rate_D(optimizer_D, i_iter)
-        adjust_learning_rate_D(optimizer_D2, i_iter)
 
         for sub_i in range(args.iter_size):
 
@@ -320,8 +309,6 @@ def main():
 
             # don't accumulate grads in D
             for param in model_D.parameters():
-                param.requires_grad = False
-            for param in model_D2.parameters():
                 param.requires_grad = False
 
             # train with source
@@ -333,19 +320,13 @@ def main():
 
             images, labels, _, _ = batch
             images = Variable(images).cuda()
-
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
             loss_seg = loss_calc(pred, labels)
 
 
-            pred_re0 = F.softmax(pred, dim=1)
-
-            pred_re=pred_re0.repeat(1, 3, 1, 1)
-
-            #pred_re_2 = 1 / (math.e ** (((pred_re0 - 0.3) * 20) * (-1)) + 1)# 0.35) * 20)  673
-            pred_re_2 = torch.sin((pred_re0 - 0.3) * 1.7)
-            pred_re_2 = pred_re_2.repeat(1, 3, 1, 1)
+            pred_re_0 = F.softmax(pred, dim=1)
+            pred_re = pred_re_0.repeat(1, 3, 1, 1)
 
 
             indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
@@ -355,13 +336,11 @@ def main():
                 [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
 
             mul_img = pred_re * img_re
-            mul_img_2 = pred_re_2 * img_re
 
 
-            D_out = model_D(mul_img)
-            D_out_2 = model_D2(mul_img_2)
+            D_out = model_D(torch.cat([mul_img,pred_re_0],1))
 
-            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
+            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))
 
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
 
@@ -378,28 +357,18 @@ def main():
             for param in model_D.parameters():
                 param.requires_grad = True
 
-            for param in model_D2.parameters():
-                param.requires_grad = True
-
             # train with pred
             pred = pred.detach()
 
-            pred_re0 = F.softmax(pred, dim=1)
-            pred_re2 = pred_re0.repeat(1, 3, 1, 1)
-
-            #pred_re2_2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
-            pred_re2_2 = torch.sin((pred_re0 - 0.3) * 1.7)
-            pred_re2_2 = pred_re2_2.repeat(1, 3, 1, 1)
-
+            pred_re2_0 = F.softmax(pred, dim=1)
+            pred_re2 = pred_re2_0.repeat(1, 3, 1, 1)
 
 
             mul_img2 = pred_re2 * img_re
-            mul_img2_2 = pred_re2_2 * img_re
 
-            D_out = model_D(mul_img2)
-            D_out_2 = model_D2(mul_img2_2)
+            D_out = model_D(torch.cat([mul_img2,pred_re2_0],1))
 
-            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))+bce_loss(D_out_2, make_D_label(pred_label,D_out_2))
+            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -428,10 +397,9 @@ def main():
             mul_img3 = pred_re3 * img_re3
 
 
-            D_out = model_D(mul_img3)
-            D_out_2 = model_D2(mul_img3)
+            D_out = model_D(torch.cat([mul_img3,D_gt_v],1))
 
-            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
+            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -440,7 +408,6 @@ def main():
 
         optimizer.step()
         optimizer_D.step()
-        optimizer_D2.step()
 
         print('exp = {}'.format(args.snapshot_dir))
         print('iter = {0:8d}/{1:8d}, loss_seg = {2:.3f}, loss_adv_p = {3:.3f}, loss_D = {4:.3f}, loss_semi = {5:.3f}, loss_semi_adv = {6:.3f}'.format(i_iter, args.num_steps, loss_seg_value, loss_adv_pred_value, loss_D_value, loss_semi_value, loss_semi_adv_value))

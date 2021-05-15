@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator2
+from model.my_discriminator import Discriminator2,Discriminator2_mul
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 import math
@@ -149,7 +149,7 @@ def get_arguments():
                 --lambda-adv-pred 0.01 \
                 --lambda-semi 0.1 --semi-start 5000 --mask-T =fv0.2
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = '1,3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0,1,2,3'
 args = get_arguments()
 
 def loss_calc(pred, label):
@@ -194,7 +194,10 @@ def make_D_label(label, D_out):
     return D_label
 
 
+
+
 def main():
+    tag = 0
 
     h, w = map(int, args.input_size.split(','))
     input_size = (h, w)
@@ -229,12 +232,15 @@ def main():
     cudnn.benchmark = True
 
     # init D
-    model_D = Discriminator2(num_classes=args.num_classes)
-    if args.restore_from_D is not None:
-         model_D.load_state_dict(torch.load(args.restore_from_D))
-    model_D = nn.DataParallel(model_D)
-    model_D.train()
-    model_D.cuda()
+    model_DS = []
+    for i in range(20):
+        model_DS.append(Discriminator2_mul(num_classes=args.num_classes))
+    # if args.restore_from_D is not None:
+    #      model_D.load_state_dict(torch.load(args.restore_from_D))
+    for model_D in model_DS:
+        model_D = nn.DataParallel(model_D)
+        model_D.train()
+        model_D.cuda()
 
     model_D2 = Discriminator2(num_classes=args.num_classes)
     if args.restore_from_D is not None:
@@ -279,9 +285,14 @@ def main():
     optimizer.zero_grad()
 
     # optimizer for discriminator network
-    optimizer_D = optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9,0.99))
+    optimizer_DS = []
+    for model_D in model_DS:
+        optimizer_DS.append(optim.Adam(model_D.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99)))
+    for optimizer_D in optimizer_DS:
+        optimizer_D.zero_grad()
+
+
     optimizer_D2 = optim.Adam(model_D2.parameters(), lr=args.learning_rate_D, betas=(0.9, 0.99))
-    optimizer_D.zero_grad()
     optimizer_D2.zero_grad()
 
     # loss/ bilinear upsampling
@@ -309,9 +320,12 @@ def main():
 
         optimizer.zero_grad()
         adjust_learning_rate(optimizer, i_iter)
-        optimizer_D.zero_grad()
+
+        for optimizer_D in optimizer_DS:
+            optimizer_D.zero_grad()
+            adjust_learning_rate_D(optimizer_D, i_iter)
+
         optimizer_D2.zero_grad()
-        adjust_learning_rate_D(optimizer_D, i_iter)
         adjust_learning_rate_D(optimizer_D2, i_iter)
 
         for sub_i in range(args.iter_size):
@@ -319,8 +333,9 @@ def main():
             # train G
 
             # don't accumulate grads in D
-            for param in model_D.parameters():
-                param.requires_grad = False
+            for model_D in model_DS:
+                for param in model_D.parameters():
+                    param.requires_grad = False
             for param in model_D2.parameters():
                 param.requires_grad = False
 
@@ -333,35 +348,56 @@ def main():
 
             images, labels, _, _ = batch
             images = Variable(images).cuda()
-
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
             loss_seg = loss_calc(pred, labels)
 
 
             pred_re0 = F.softmax(pred, dim=1)
-
             pred_re=pred_re0.repeat(1, 3, 1, 1)
-
-            #pred_re_2 = 1 / (math.e ** (((pred_re0 - 0.3) * 20) * (-1)) + 1)# 0.35) * 20)  673
-            pred_re_2 = torch.sin((pred_re0 - 0.3) * 1.7)
-            pred_re_2 = pred_re_2.repeat(1, 3, 1, 1)
-
-
             indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
             indices_2 = torch.index_select(images, 1, Variable(torch.LongTensor([1])).cuda())
             indices_3 = torch.index_select(images, 1, Variable(torch.LongTensor([2])).cuda())
             img_re = torch.cat(
                 [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
 
-            mul_img = pred_re * img_re
-            mul_img_2 = pred_re_2 * img_re
+            mul_img = pred_re * img_re#10,63,321,321
+
+            D_out_2 = model_D2(mul_img)
+
+            loss_adv_pred_ = 0
+
+            for i_l in range(labels.shape[0]):
+                label_set=np.unique(labels[i_l]).tolist()
+                for ls in label_set:
+                    if ls !=0 and ls!=255:
+                        ls=int(ls)
+
+                        img_p = torch.cat(
+                            [mul_img[i_l][ls].unsqueeze(0).unsqueeze(0), mul_img[i_l][ls+ 21].unsqueeze(0).
+                            unsqueeze(0), mul_img[i_l][ls+ 21 + 21].unsqueeze(0).unsqueeze(0)], 1)
+                        #print 1,img_p.size()#(1L, 3L, 321L, 321L)
+                        imgs=img_p
+                        imgs1 = imgs[:,:,0:107, 0:107]
+                        imgs2 = imgs[:,:,0:107, 107:214]
+                        imgs3 = imgs[:,:,0:107, 214:321]
+                        imgs4 = imgs[:,:,107:214, 0:107]
+                        imgs5 = imgs[:,:,107:214, 107:214]
+                        imgs6 = imgs[:,:,107:214, 214:321]
+                        imgs7 = imgs[:,:,214:321, 0:107]
+                        imgs8 = imgs[:,:,214:321, 107:214]
+                        imgs9 = imgs[:,:,214:321, 214:321]
+
+                        #print 2, imgs1.size()#(1L, 3L, 107L, 107L)
+
+                        img_ps=torch.cat([imgs1,imgs2,imgs3,imgs4,imgs5,imgs6,imgs7,imgs8,imgs9],0)
+                        #print 3, img_ps.size()#(9L, 3L, 107L, 107L)
+
+                        D_out = model_DS[ls-1](img_ps)
+                        loss_adv_pred_=loss_adv_pred_+bce_loss(D_out, make_D_label(gt_label, D_out))
 
 
-            D_out = model_D(mul_img)
-            D_out_2 = model_D2(mul_img_2)
-
-            loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
+            loss_adv_pred = loss_adv_pred_*0.5+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
 
             loss = loss_seg + args.lambda_adv_pred * loss_adv_pred
 
@@ -375,8 +411,9 @@ def main():
             # train D
 
             # bring back requires_grad
-            for param in model_D.parameters():
-                param.requires_grad = True
+            for model_D in model_DS:
+                for param in model_D.parameters():
+                    param.requires_grad = True
 
             for param in model_D2.parameters():
                 param.requires_grad = True
@@ -387,19 +424,45 @@ def main():
             pred_re0 = F.softmax(pred, dim=1)
             pred_re2 = pred_re0.repeat(1, 3, 1, 1)
 
-            #pred_re2_2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
-            pred_re2_2 = torch.sin((pred_re0 - 0.3) * 1.7)
-            pred_re2_2 = pred_re2_2.repeat(1, 3, 1, 1)
-
-
-
             mul_img2 = pred_re2 * img_re
-            mul_img2_2 = pred_re2_2 * img_re
 
-            D_out = model_D(mul_img2)
-            D_out_2 = model_D2(mul_img2_2)
 
-            loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))+bce_loss(D_out_2, make_D_label(pred_label,D_out_2))
+            D_out_2 = model_D2(mul_img2)
+
+            loss_adv_pred_ = 0
+
+            for i_l in range(labels.shape[0]):
+                label_set = np.unique(labels[i_l]).tolist()
+                for ls in label_set:
+                    if ls != 0 and ls != 255:
+                        ls = int(ls)
+
+                        img_p = torch.cat(
+                            [mul_img2[i_l][ls].unsqueeze(0).unsqueeze(0), mul_img2[i_l][ls+ 21].unsqueeze(0).
+                                unsqueeze(0), mul_img2[i_l][ls + 21 + 21].unsqueeze(0).unsqueeze(0)], 1)
+                        # print 1,img_p.size()#(1L, 3L, 321L, 321L)
+                        imgs = img_p
+                        imgs1 = imgs[:, :, 0:107, 0:107]
+                        imgs2 = imgs[:, :, 0:107, 107:214]
+                        imgs3 = imgs[:, :, 0:107, 214:321]
+                        imgs4 = imgs[:, :, 107:214, 0:107]
+                        imgs5 = imgs[:, :, 107:214, 107:214]
+                        imgs6 = imgs[:, :, 107:214, 214:321]
+                        imgs7 = imgs[:, :, 214:321, 0:107]
+                        imgs8 = imgs[:, :, 214:321, 107:214]
+                        imgs9 = imgs[:, :, 214:321, 214:321]
+
+                        # print 2, imgs1.size()#(1L, 3L, 107L, 107L)
+
+                        img_ps = torch.cat([imgs1, imgs2, imgs3, imgs4, imgs5, imgs6, imgs7, imgs8, imgs9], 0)
+                        # print 3, img_ps.size()#(9L, 3L, 107L, 107L)
+
+                        D_out = model_DS[ls - 1](img_ps)
+                        loss_adv_pred_ = loss_adv_pred_ + bce_loss(D_out, make_D_label(pred_label, D_out))
+
+
+
+            loss_D = loss_adv_pred_*0.5+bce_loss(D_out_2, make_D_label(pred_label,D_out_2))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -413,10 +476,12 @@ def main():
                 trainloader_gt_iter = enumerate(trainloader_gt)
                 _, batch = trainloader_gt_iter.next()
 
-            img_gt, labels_gt, _, _ = batch
+            img_gt, labels_gt, _, name = batch
             img_gt=Variable(img_gt).cuda()
             D_gt_v = Variable(one_hot(labels_gt)).cuda()
             ignore_mask_gt = (labels_gt.numpy() == 255)
+
+            lb=D_gt_v.detach()
 
             pred_re3 = D_gt_v.repeat(1, 3, 1, 1)
             indices_1 = torch.index_select(img_gt, 1, Variable(torch.LongTensor([0])).cuda())
@@ -425,13 +490,129 @@ def main():
             img_re3 = torch.cat(
                 [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
 
+            #mul_img3 = img_re3
             mul_img3 = pred_re3 * img_re3
 
 
-            D_out = model_D(mul_img3)
             D_out_2 = model_D2(mul_img3)
 
-            loss_D = bce_loss(D_out, make_D_label(gt_label,D_out))+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
+            loss_adv_pred_ = 0
+
+            for i_l in range(labels_gt.shape[0]):
+                label_set = np.unique(labels_gt[i_l]).tolist()
+
+                for ls in label_set:
+                    if ls != 0 and ls != 255:
+                        ls = int(ls)
+
+                        img_p = torch.cat(
+                            [mul_img3[i_l][ls].unsqueeze(0).unsqueeze(0), mul_img3[i_l][ls+ 21].unsqueeze(0).
+                                unsqueeze(0), mul_img3[i_l][ls+ 21 + 21].unsqueeze(0).unsqueeze(0)], 1)
+                        # print 1,img_p.size()#(1L, 3L, 321L, 321L)
+                        imgs = img_p
+                        imgs1 = imgs[:, :, 0:107, 0:107]
+                        imgs2 = imgs[:, :, 0:107, 107:214]
+                        imgs3 = imgs[:, :, 0:107, 214:321]
+                        imgs4 = imgs[:, :, 107:214, 0:107]
+                        imgs5 = imgs[:, :, 107:214, 107:214]
+                        imgs6 = imgs[:, :, 107:214, 214:321]
+                        imgs7 = imgs[:, :, 214:321, 0:107]
+                        imgs8 = imgs[:, :, 214:321, 107:214]
+                        imgs9 = imgs[:, :, 214:321, 214:321]
+
+                        # print 2, imgs1.size()#(1L, 3L, 107L, 107L)
+
+                        img_ps = torch.cat([imgs1, imgs2, imgs3, imgs4, imgs5, imgs6, imgs7, imgs8, imgs9], 0)
+                        # print 3, img_ps.size()#(9L, 3L, 107L, 107L)
+
+                        D_out = model_DS[ls - 1](img_ps)
+                        loss_adv_pred_ = loss_adv_pred_ + bce_loss(D_out, make_D_label(gt_label, D_out))
+
+
+                        '''
+
+
+                        if tag == 0:
+                            # print lb[0].size()
+                            # lb1=lb[0][0]
+                            # lb2 = lb[0][1]
+                            # lb3 = lb[0][2]
+                            # lb4 = lb[0][3]
+                            # lb5 = lb[0][4]
+                            # lb6 = lb[0][5]
+                            # lb7 = lb[0][0]
+                            # lb8 = lb[0][0]
+                            # lb9 = lb[0][0]
+                            # lb10 = lb[0][0]
+
+
+                            print label_set, name[0]
+                            print ls
+                            imgs = imgs.squeeze()
+                            imgs = imgs.transpose(0, 1)
+                            imgs = imgs.transpose(1, 2)
+
+                            imgs1 = imgs1.squeeze()
+                            imgs1 = imgs1.transpose(0, 1)
+                            imgs1 = imgs1.transpose(1, 2)
+
+                            imgs2 = imgs2.squeeze()
+                            imgs2 = imgs2.transpose(0, 1)
+                            imgs2 = imgs2.transpose(1, 2)
+
+                            imgs3 = imgs3.squeeze()
+                            imgs3 = imgs3.transpose(0, 1)
+                            imgs3 = imgs3.transpose(1, 2)
+
+                            imgs4 = imgs4.squeeze()
+                            imgs4 = imgs4.transpose(0, 1)
+                            imgs4 = imgs4.transpose(1, 2)
+
+                            imgs5 = imgs5.squeeze()
+                            imgs5 = imgs5.transpose(0, 1)
+                            imgs5 = imgs5.transpose(1, 2)
+
+                            imgs6 = imgs6.squeeze()
+                            imgs6 = imgs6.transpose(0, 1)
+                            imgs6 = imgs6.transpose(1, 2)
+
+                            imgs7 = imgs7.squeeze()
+                            imgs7 = imgs7.transpose(0, 1)
+                            imgs7 = imgs7.transpose(1, 2)
+
+                            imgs8 = imgs8.squeeze()
+                            imgs8 = imgs8.transpose(0, 1)
+                            imgs8 = imgs8.transpose(1, 2)
+
+                            imgs9 = imgs9.squeeze()
+                            imgs9 = imgs9.transpose(0, 1)
+                            imgs9 = imgs9.transpose(1, 2)
+
+                            imgs = imgs.data.cpu().numpy()
+                            imgs1 = imgs1.data.cpu().numpy()
+                            imgs2 = imgs2.data.cpu().numpy()
+                            imgs3 = imgs3.data.cpu().numpy()
+                            imgs4 = imgs4.data.cpu().numpy()
+                            imgs5 = imgs5.data.cpu().numpy()
+                            imgs6 = imgs6.data.cpu().numpy()
+                            imgs7 = imgs7.data.cpu().numpy()
+                            imgs8 = imgs8.data.cpu().numpy()
+                            imgs9 = imgs9.data.cpu().numpy()
+                            cv2.imwrite('/data1/wyc/1.png', imgs1)
+                            cv2.imwrite('/data1/wyc/2.png', imgs2)
+                            cv2.imwrite('/data1/wyc/3.png', imgs3)
+                            cv2.imwrite('/data1/wyc/4.png', imgs4)
+                            cv2.imwrite('/data1/wyc/5.png', imgs5)
+                            cv2.imwrite('/data1/wyc/6.png', imgs6)
+                            cv2.imwrite('/data1/wyc/7.png', imgs7)
+                            cv2.imwrite('/data1/wyc/8.png', imgs8)
+                            cv2.imwrite('/data1/wyc/9.png', imgs9)
+                            cv2.imwrite('/data1/wyc/img.png', imgs)
+                            tag = 1
+                        '''
+
+
+            loss_D = loss_adv_pred_*0.5+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
             loss_D = loss_D/args.iter_size/2
             loss_D.backward()
             loss_D_value += loss_D.data.cpu().numpy()[0]
@@ -439,7 +620,10 @@ def main():
 
 
         optimizer.step()
-        optimizer_D.step()
+
+        for optimizer_D in optimizer_DS:
+            optimizer_D.step()
+
         optimizer_D2.step()
 
         print('exp = {}'.format(args.snapshot_dir))

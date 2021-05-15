@@ -17,7 +17,7 @@ import pickle
 from packaging import version
 
 from model.my_deeplab import Res_Deeplab
-from model.my_discriminator import Discriminator2
+from model.my_discriminator import Discriminator2,Discriminator2_patch
 from utils.my_loss import CrossEntropy2d, BCEWithLogitsLoss2d
 from dataset.voc_dataset import VOCDataSet, VOCGTDataSet
 import math
@@ -236,7 +236,7 @@ def main():
     model_D.train()
     model_D.cuda()
 
-    model_D2 = Discriminator2(num_classes=args.num_classes)
+    model_D2 = Discriminator2_patch(num_classes=args.num_classes)
     if args.restore_from_D is not None:
         model_D2.load_state_dict(torch.load(args.restore_from_D))
     model_D2 = nn.DataParallel(model_D2)
@@ -333,19 +333,15 @@ def main():
 
             images, labels, _, _ = batch
             images = Variable(images).cuda()
-
             ignore_mask = (labels.numpy() == 255)
             pred = interp(model(images))
             loss_seg = loss_calc(pred, labels)
 
 
             pred_re0 = F.softmax(pred, dim=1)
-
             pred_re=pred_re0.repeat(1, 3, 1, 1)
 
             #pred_re_2 = 1 / (math.e ** (((pred_re0 - 0.3) * 20) * (-1)) + 1)# 0.35) * 20)  673
-            pred_re_2 = torch.sin((pred_re0 - 0.3) * 1.7)
-            pred_re_2 = pred_re_2.repeat(1, 3, 1, 1)
 
 
             indices_1 = torch.index_select(images, 1, Variable(torch.LongTensor([0])).cuda())
@@ -355,11 +351,10 @@ def main():
                 [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
 
             mul_img = pred_re * img_re
-            mul_img_2 = pred_re_2 * img_re
 
 
             D_out = model_D(mul_img)
-            D_out_2 = model_D2(mul_img_2)
+            D_out_2 = model_D2(mul_img)
 
             loss_adv_pred = bce_loss(D_out, make_D_label(gt_label,D_out))+bce_loss(D_out_2, make_D_label(gt_label,D_out_2))
 
@@ -388,16 +383,12 @@ def main():
             pred_re2 = pred_re0.repeat(1, 3, 1, 1)
 
             #pred_re2_2 = 1 / (math.e ** (((pred_re0 - 0.35) * 20) * (-1)) + 1)
-            pred_re2_2 = torch.sin((pred_re0 - 0.3) * 1.7)
-            pred_re2_2 = pred_re2_2.repeat(1, 3, 1, 1)
-
 
 
             mul_img2 = pred_re2 * img_re
-            mul_img2_2 = pred_re2_2 * img_re
 
             D_out = model_D(mul_img2)
-            D_out_2 = model_D2(mul_img2_2)
+            D_out_2 = model_D2(mul_img2)
 
             loss_D = bce_loss(D_out, make_D_label(pred_label,D_out))+bce_loss(D_out_2, make_D_label(pred_label,D_out_2))
             loss_D = loss_D/args.iter_size/2

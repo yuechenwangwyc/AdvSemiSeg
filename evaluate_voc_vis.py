@@ -14,14 +14,14 @@ from torch.autograd import Variable
 import torchvision.models as models
 import torch.nn.functional as F
 from torch.utils import data, model_zoo
-
+import os.path as osp
 from model.deeplab import Res_Deeplab
 from dataset.voc_dataset import VOCDataSet
 from model.deeplab import Res_Deeplab
 from PIL import Image
 
 import matplotlib.pyplot as plt
-os.environ["CUDA_VISIBLE_DEVICES"] = '1,2'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,3'
 IMG_MEAN = np.array((104.00698793,116.66876762,122.67891434), dtype=np.float32)
 
 MODEL = 'DeepLab'
@@ -198,7 +198,7 @@ def main():
 
     model = Res_Deeplab(num_classes=args.num_classes)
     #model.load_state_dict(torch.load('/data/wyc/AdvSemiSeg/snapshots/VOC_15000.pth'))#70.7
-    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_t_baseline_1adv_mul_new_two_patch_test_20000.pth')#baseline707 adv 709 nadv 705()*2#n adv0.694
+    state_dict=torch.load('/data1/wyc/AdvSemiSeg/snapshots/VOC_t_baseline_1adv_mul_20000.pth')#baseline707 adv 709 nadv 705()*2#n adv0.694
 
     # state_dict = torch.load(
     #     '/home/wyc/VOC_t_baseline_nadv2_20000.pth')  # baseline707 adv 709 nadv 705()*2
@@ -238,13 +238,92 @@ def main():
 
     colorize = VOCColorize()
 
+
+    tag=0
+
     for index, batch in enumerate(testloader):
         if index % 100 == 0:
             print('%d processd'%(index))
         image, label, size, name = batch
         size = size[0].numpy()
         output = model(Variable(image, volatile=True).cuda(gpu0))
+        pred = interp(output)
+        pred01=F.softmax(pred, dim=1)
         output = interp(output).cpu().data[0].numpy()
+        image=Variable(image).cuda()
+
+
+
+        pred_re = F.softmax(pred, dim=1).repeat(1, 3, 1, 1)
+
+        indices_1 = torch.index_select(image, 1, Variable(torch.LongTensor([0])).cuda())
+        indices_2 = torch.index_select(image, 1, Variable(torch.LongTensor([1])).cuda())
+        indices_3 = torch.index_select(image, 1, Variable(torch.LongTensor([2])).cuda())
+        img_re = torch.cat(
+            [indices_1.repeat(1, 21, 1, 1), indices_2.repeat(1, 21, 1, 1), indices_3.repeat(1, 21, 1, 1), ], 1)
+
+        mul_img = pred_re * img_re
+
+        for i_l in range(label.shape[0]):
+            label_set = np.unique(label[i_l]).tolist()
+            for ls in label_set:
+                if ls != 0 and ls != 255:
+                    ls = int(ls)
+
+                    img_p = torch.cat(
+                        [mul_img[i_l][ls].unsqueeze(0).unsqueeze(0), mul_img[i_l][ls + 21].unsqueeze(0).
+                            unsqueeze(0), mul_img[i_l][ls + 21 + 21].unsqueeze(0).unsqueeze(0)], 1)
+
+                    imgs = img_p.squeeze()
+                    imgs = imgs.transpose(0, 1)
+                    imgs = imgs.transpose(1, 2)
+                    imgs = imgs.data.cpu().numpy()
+
+                    img_ori = image[0]
+                    img_ori = img_ori.squeeze()
+                    img_ori = img_ori.transpose(0, 1)
+                    img_ori = img_ori.transpose(1, 2)
+                    img_ori = img_ori.data.cpu().numpy()
+
+                    pred_ori = pred01[0][ls]
+                    pred_ori = pred_ori.data.cpu().numpy()
+                    pred_0=pred_ori.copy()
+
+                    pred_ori = pred_ori
+
+                    size = pred_ori.shape
+                    color_image = np.zeros((3, size[0], size[1]), dtype=np.uint8)
+
+
+                    for i in range(size[0]):
+                        for j in range(size[1]):
+                            if pred_0[i][j]>0.995:
+                                color_image[0][i][j]=0
+                                color_image[1][i][j]=255
+                                color_image[2][i][j]=0
+                            elif pred_0[i][j]>0.9:
+                                color_image[0][i][j]=255
+                                color_image[1][i][j]=0
+                                color_image[2][i][j]=0
+                            elif pred_0[i][j]>0.7:
+                                color_image[0][i][j]=0
+                                color_image[1][i][j]=0
+                                color_image[2][i][j]=255
+
+                    color_image=color_image.transpose((1,2,0))
+
+
+
+                    # print pred_ori.shape
+
+                    cv2.imwrite(osp.join('/data1/wyc/AdvSemiSeg/vis/img_pred',name[0]+'.png'), imgs)
+                    cv2.imwrite(osp.join('/data1/wyc/AdvSemiSeg/vis/image',name[0]+'.png'), img_ori)
+                    cv2.imwrite(osp.join('/data1/wyc/AdvSemiSeg/vis/pred',name[0]+'.png'), color_image)
+
+
+
+
+
 
         output = output[:,:size[0],:size[1]]
         gt = np.asarray(label[0].numpy()[:size[0],:size[1]], dtype=np.int)

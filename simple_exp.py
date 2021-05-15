@@ -46,7 +46,7 @@ import torch
 
 
 
-''''''
+'''
 x=np.arange(0,1.5,0.1)
 
 # y=1/(math.e**(((x-0.6)*30)*(-1))+1)
@@ -67,4 +67,12 @@ plt.title("x")
 plt.plot(x,y)
 plt.plot(x,t)
 plt.show()
-''''''
+'''
+
+import numpy as np
+
+mat=np.ones([600,600])*(0)
+
+import cv2
+
+cv2.imwrite('/data1/wyc/0.png', mat)
